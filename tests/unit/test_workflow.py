@@ -52,10 +52,10 @@ class FakeWorktrees:
         self, run_id: str, *, ref: str, branch: str | None = None
     ) -> Path:
         path = self.root / run_id
-        path.mkdir()
+        path.mkdir(parents=True)
         return path
 
-    async def changed_files(self, _path: Path) -> tuple[str, ...]:
+    async def changed_files(self, worktree: Path) -> tuple[str, ...]:
         return ()
 
     async def remove(self, path: Path) -> None:
