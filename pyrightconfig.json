@@ -1,0 +1,9 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["app", "tests"],
+  "extraPaths": [
+    "/home/dzabaev/agent_pipeline",
+    "/home/dzabaev/agent_pipeline/.venv/lib/python3.12/site-packages"
+  ]
+}

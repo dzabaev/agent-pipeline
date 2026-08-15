@@ -1,0 +1,34 @@
+feature_name: Self-hosted agent automation server
+problem_statement: >-
+  A single user needs a VPS-hosted service that reacts to GitHub events, runs a coding
+  agent against selected repositories, and publishes advisory comments or draft pull
+  requests while exposing live job control through a web dashboard.
+constraints:
+  - FastAPI backend with Jinja and HTMX dashboard
+  - SQLite persistence and database-backed worker queue
+  - GitHub OAuth dashboard authentication restricted to one configured GitHub user
+  - GitHub App webhooks for issues, issue comments, pull requests, and reviews
+  - Structured rule filters only
+  - Pi runs through RPC in host git worktrees under an unprivileged worker account
+  - Pi never receives GitHub credentials; server owns all GitHub writes
+  - Repository verification command must pass before a change job can create a draft PR
+  - Successful worktrees are deleted immediately; failed or cancelled worktrees remain for 3 days
+  - Host-worktree worker concurrency is fixed at 1; parallelism requires per-run filesystem isolation
+out_of_scope:
+  - Multiple users or organizations
+  - Automatic pull request merging
+  - Containerized job isolation
+  - Arbitrary rule scripts or expression languages
+  - Direct GitHub credentials or gh CLI access for agents
+  - Dynamic plugin discovery or third-party plugin packaging
+key_decisions:
+  - decision: Hardcode GitHubForge and PiRunner at application composition
+    rationale: Keep first release simple while isolating external integration details behind small replaceable boundaries.
+  - decision: Support advisory and change jobs from automatic rules and manual dashboard runs
+    rationale: Cover analysis and code-changing workflows through one job pipeline.
+  - decision: Use a fresh Pi session per job with explicit continuation support
+    rationale: Preserve reproducibility while allowing interactive follow-up when requested.
+  - decision: Open draft pull requests automatically only after verification succeeds
+    rationale: Keep merge authority with the user and block publishing known-broken changes.
+  - decision: Use one repository-level verification command
+    rationale: Give server a deterministic success gate independent of agent claims.

@@ -1,0 +1,23 @@
+[Unit]
+Description=Agent Pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-pipeline
+Group=agent-pipeline
+WorkingDirectory=/opt/agent-pipeline
+EnvironmentFile=/etc/agent-pipeline.env
+ExecStart=/opt/agent-pipeline/.venv/bin/uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+UMask=0077
+Delegate=yes
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/agent-pipeline /home/agent-pipeline-worker/.pi
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2 @@
+# Install as /etc/sudoers.d/agent-pipeline with mode 0440.
+agent-pipeline ALL=(agent-pipeline-worker) NOPASSWD: /bin/sh

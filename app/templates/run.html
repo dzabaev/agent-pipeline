@@ -1,0 +1,53 @@
+{% extends "base.html" %} {% block title %}Run {{ run.id[:8] }} · Agent
+Pipeline{% endblock %} {% block content %}
+<p><a href="/">← Dashboard</a></p>
+<h1>Run {{ run.id[:8] }}</h1>
+{% include "_run.html" %}
+<section class="card controls">
+  <h2>Control</h2>
+  <form method="post" action="/runs/{{ run.id }}/steer">
+    <input type="hidden" name="csrf" value="{{ csrf }}" /><label
+      >Steer <textarea name="message" required></textarea></label
+    ><button>Send now</button>
+  </form>
+  <form method="post" action="/runs/{{ run.id }}/follow-up">
+    <input type="hidden" name="csrf" value="{{ csrf }}" /><label
+      >Follow-up <textarea name="message" required></textarea></label
+    ><button>Queue</button>
+  </form>
+  <form method="post" action="/runs/{{ run.id }}/cancel">
+    <input type="hidden" name="csrf" value="{{ csrf }}" /><button
+      class="danger"
+    >
+      Cancel
+    </button>
+  </form>
+  {% if run.status in ['failed', 'cancelled', 'interrupted'] and not
+  run.github_comment_url and not run.pull_request_url %}
+  <form method="post" action="/runs/{{ run.id }}/retry">
+    <input type="hidden" name="csrf" value="{{ csrf }}" /><button>
+      Retry fresh
+    </button>
+  </form>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>Continue in new run</h2>
+  <form method="post" action="/runs">
+    <input type="hidden" name="csrf" value="{{ csrf }}" /><input
+      type="hidden"
+      name="repository_id"
+      value="{{ run.repository_id }}"
+    /><input type="hidden" name="continuation_run_id" value="{{ run.id }}" />
+    <label
+      >Mode
+      <select name="kind">
+        <option value="advisory">Advisory</option>
+        <option value="change">Change</option>
+      </select></label
+    >
+    <label>Task <textarea name="instruction" required></textarea></label
+    ><button>Continue</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,49 @@
+<div
+  id="run"
+  {%
+  if
+  run.status
+  not
+  in
+  ['succeeded', 'failed', 'cancelled', 'interrupted']
+  %}hx-get="/runs/{{ run.id }}/fragment"
+  hx-trigger="every 1s"
+  hx-swap="outerHTML"
+  {%
+  endif
+  %}
+>
+  <section class="card summary">
+    <div>
+      <strong>Status</strong>
+      <span class="status {{ run.status }}">{{ run.status }}</span>
+    </div>
+    <div><strong>Repository</strong> {{ run.full_name }}</div>
+    <div><strong>Task</strong> {{ run.instruction }}</div>
+    {% if run.error %}
+    <pre class="error">{{ run.error }}</pre>
+    {% endif %} {% if run.github_comment_url %}<a
+      href="{{ run.github_comment_url }}"
+      >GitHub comment</a
+    >{% endif %} {% if run.pull_request_url %}<a
+      href="{{ run.pull_request_url }}"
+      >Draft pull request</a
+    >{% endif %}
+  </section>
+  <section class="card">
+    <h2>Agent output</h2>
+    <pre>{{ run.output_text or live_text or 'Waiting…' }}</pre>
+  </section>
+  <section class="card">
+    <h2>Events</h2>
+    <div class="events">
+      {% for event in events %} {% if event.kind != 'text' %}
+      <div>
+        <time>{{ event.created_at[11:19] }}</time>
+        <strong>{{ event.kind }}</strong>
+        <code>{{ event.payload | tojson }}</code>
+      </div>
+      {% endif %} {% endfor %}
+    </div>
+  </section>
+</div>

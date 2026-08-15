@@ -1,0 +1,233 @@
+{% extends "base.html" %} {% block header %} <span class="spacer"></span
+><span>{{ user.login }}</span>
+<form method="post" action="/logout" class="inline">
+  <input type="hidden" name="csrf" value="{{ csrf }}" /><button>
+    Sign out
+  </button>
+</form>
+{% endblock %} {% block content %}
+<h1>Dashboard</h1>
+<div class="grid">
+  <section class="card">
+    <h2>Repositories</h2>
+    {% for repo in repositories %}
+    <div class="row">
+      <strong>{{ repo.full_name }}</strong
+      ><code>{{ repo.verification_command }}</code>
+      <form
+        method="post"
+        action="/repositories/{{ repo.id }}/toggle"
+        class="inline"
+      >
+        <input type="hidden" name="csrf" value="{{ csrf }}" /><button>
+          {{ 'Disable' if repo.enabled else 'Enable' }}
+        </button>
+      </form>
+    </div>
+    {% else %}
+    <p class="muted">No repositories.</p>
+    {% endfor %}
+    <details>
+      <summary>Add repository</summary>
+      <form method="post" action="/repositories">
+        <input type="hidden" name="csrf" value="{{ csrf }}" />
+        <label
+          >Repository
+          <input name="full_name" placeholder="owner/repository" required
+        /></label>
+        <label
+          >Installation ID
+          <input name="installation_id" type="number" min="1" required
+        /></label>
+        <label
+          >Verification command
+          <input name="verification_command" placeholder="pytest" required
+        /></label>
+        <button>Add</button>
+      </form>
+    </details>
+  </section>
+  <section class="card">
+    <h2>Workers</h2>
+    <p>Concurrency: <strong>{{ worker_concurrency }}</strong></p>
+    <p class="muted">
+      Host-worktree mode stays serial so one worker cannot modify another run.
+    </p>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Manual run</h2>
+  <form method="post" action="/runs" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}" />
+    <label
+      >Repository
+      <select name="repository_id" required>
+        {% for repo in repositories if repo.enabled %}
+        <option value="{{ repo.id }}">{{ repo.full_name }}</option>
+        {% endfor %}
+      </select></label
+    >
+    <label
+      >Mode
+      <select name="kind">
+        <option value="advisory">Advisory</option>
+        <option value="change">Change</option>
+      </select></label
+    >
+    <label
+      >Target
+      <select name="target_kind">
+        <option value="">Dashboard only</option>
+        <option value="issue">Issue</option>
+        <option value="pull_request">Pull request</option>
+      </select></label
+    >
+    <label
+      >Target number <input name="target_number" type="number" min="1"
+    /></label>
+    <label>Model override <input name="model" placeholder="optional" /></label>
+    <label
+      >Thinking
+      <select name="thinking_level">
+        <option value="">Global default</option>
+        <option>off</option>
+        <option>low</option>
+        <option>medium</option>
+        <option>high</option>
+      </select></label
+    >
+    <label class="wide"
+      >Task <textarea name="instruction" rows="4" required></textarea>
+    </label>
+    <button>Queue run</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Rules</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Repository</th>
+        <th>Event</th>
+        <th>Mode</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rule in rules %}
+      <tr>
+        <td>{{ rule.name }}</td>
+        <td>{{ rule.full_name }}</td>
+        <td>{{ rule.event }}</td>
+        <td>{{ rule.kind }}</td>
+        <td>{{ 'enabled' if rule.enabled else 'disabled' }}</td>
+        <td>
+          <form method="post" action="/rules/{{ rule.id }}/toggle">
+            <input type="hidden" name="csrf" value="{{ csrf }}" /><button>
+              Toggle
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <details>
+    <summary>Add rule</summary>
+    <form method="post" action="/rules" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}" />
+      <label>Name <input name="name" required /></label>
+      <label
+        >Repository
+        <select name="repository_id">
+          {% for repo in repositories %}
+          <option value="{{ repo.id }}">{{ repo.full_name }}</option>
+          {% endfor %}
+        </select></label
+      >
+      <label
+        >Event
+        <select name="event">
+          {% for event in events %}
+          <option>{{ event }}</option>
+          {% endfor %}
+        </select></label
+      >
+      <label
+        >Actions, comma separated
+        <input name="actions" placeholder="opened,synchronize"
+      /></label>
+      <label
+        >Mode
+        <select name="kind">
+          <option value="advisory">Advisory</option>
+          <option value="change">Change</option>
+        </select></label
+      >
+      <label
+        >Subject
+        <select name="subject_kind">
+          <option value="any">Any</option>
+          <option value="issue">Issue</option>
+          <option value="pull_request">Pull request</option>
+        </select></label
+      >
+      <label>All labels <input name="labels_all" /></label
+      ><label>Any labels <input name="labels_any" /></label>
+      <label>Allowed senders <input name="sender_allow" /></label
+      ><label>Author associations <input name="author_associations" /></label>
+      <label>Body contains any <input name="body_contains_any" /></label
+      ><label>Base branches <input name="base_branches" /></label>
+      <label
+        >Changed paths (glob)
+        <input name="changed_paths_any" placeholder="src/**,*.py" /></label
+      ><label>Review states <input name="review_states" /></label>
+      <label
+        >Draft
+        <select name="draft">
+          <option value="">Any</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select></label
+      >
+      <label>Model override <input name="model" /></label
+      ><label>Thinking override <input name="thinking_level" /></label>
+      <label class="wide"
+        >Task instruction
+        <textarea name="instruction" rows="4" required></textarea>
+      </label>
+      <button>Add rule</button>
+    </form>
+  </details>
+</section>
+
+<section class="card">
+  <h2>Runs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Queued</th>
+        <th>Repository</th>
+        <th>Mode</th>
+        <th>Source</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td><a href="/runs/{{ run.id }}">{{ run.queued_at[:19] }}</a></td>
+        <td>{{ run.full_name }}</td>
+        <td>{{ run.kind }}</td>
+        <td>{{ run.source }}</td>
+        <td><span class="status {{ run.status }}">{{ run.status }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
