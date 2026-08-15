@@ -89,6 +89,13 @@ class CodeHost(WebhookParser, Protocol):
     def remote_url(self) -> str:
         raise RuntimeError("protocol method")
 
+    @property
+    def git_environment(self) -> Mapping[str, str]:
+        raise RuntimeError("protocol method")
+
+    async def close(self) -> None:
+        raise RuntimeError("protocol method")
+
     async def fetch_context(self, event: CodeHostEvent) -> ConversationContext:
         raise RuntimeError("protocol method")
 

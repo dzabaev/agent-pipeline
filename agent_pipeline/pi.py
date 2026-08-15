@@ -57,6 +57,10 @@ class PiAgentRunner:
             raise AgentExecutionError(
                 f"Pi timed out after {request.timeout_seconds} seconds"
             ) from error
+        except asyncio.CancelledError:
+            _stop_process_group(process.pid)
+            await process.wait()
+            raise
 
         if process.returncode:
             detail = stderr.decode(errors="replace").strip()[-4000:]

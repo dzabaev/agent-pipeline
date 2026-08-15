@@ -36,6 +36,24 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(claimed.status, RunStatus.RUNNING)
         self.assertIsNone(no_second_claim)
 
+    def test_only_one_run_can_reserve_issue_implementation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=9,
+                run_id="plan-run",
+                pull_request_number=10,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+
+            first = database.reserve_implementation(9, "run-1")
+            second = database.reserve_implementation(9, "run-2")
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+
 
 if __name__ == "__main__":
     unittest.main()

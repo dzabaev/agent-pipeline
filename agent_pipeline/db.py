@@ -287,6 +287,40 @@ class Database:
         except KeyError:
             return None
 
+    def reserve_implementation(self, issue_number: int, run_id: str) -> bool:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE issues
+                SET implementation_run_id = ?, updated_at = ?
+                WHERE number = ? AND plan_pr_number IS NOT NULL
+                  AND (implementation_run_id IS NULL OR implementation_run_id = ?)
+                """,
+                (run_id, _now(), issue_number, run_id),
+            ).rowcount
+            connection.commit()
+        return bool(updated)
+
+    def record_implementation(
+        self,
+        *,
+        issue_number: int,
+        run_id: str,
+        pull_request_number: int,
+    ) -> None:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE issues
+                SET implementation_pr_number = ?, updated_at = ?
+                WHERE number = ? AND implementation_run_id = ?
+                """,
+                (pull_request_number, _now(), issue_number, run_id),
+            ).rowcount
+        if not updated:
+            raise KeyError(issue_number)
+
     def finish_run(
         self,
         run_id: str,

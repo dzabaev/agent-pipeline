@@ -64,6 +64,10 @@ class GitHubCodeHost:
             host = "github.com"
         return f"https://{host}/{self.repository}.git"
 
+    @property
+    def git_environment(self) -> Mapping[str, str]:
+        return self._git_environment()
+
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()

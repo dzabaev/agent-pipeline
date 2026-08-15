@@ -13,7 +13,10 @@ from agent_pipeline.contracts import (  # pyright: ignore[reportMissingImports]
     RunKind,
 )
 from agent_pipeline.db import Database  # pyright: ignore[reportMissingImports]
-from agent_pipeline.workflow import WorkflowProcessor  # pyright: ignore[reportMissingImports]
+from agent_pipeline.workflow import (  # pyright: ignore[reportMissingImports]
+    WorkflowProcessor,
+    is_implementation_command,
+)
 
 
 class FakeCodeHost:
@@ -117,6 +120,14 @@ class FakeWorktrees:
 
     async def remove(self, path: Path) -> None:
         self.removed.append(path)
+
+
+class ApprovalCommandTests(unittest.TestCase):
+    def test_accepts_only_complete_approval_phrases(self) -> None:
+        self.assertTrue(is_implementation_command("Yes."))
+        self.assertTrue(is_implementation_command("/pi implement"))
+        self.assertFalse(is_implementation_command("ok, but change the plan first"))
+        self.assertFalse(is_implementation_command("the answer is yes"))
 
 
 class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
