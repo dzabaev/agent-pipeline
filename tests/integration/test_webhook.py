@@ -5,15 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi.testclient import TestClient  # pyright: ignore[reportMissingImports]
+import httpx  # pyright: ignore[reportMissingImports]
 
 from agent_pipeline.db import Database  # pyright: ignore[reportMissingImports]
 from agent_pipeline.github import GitHubCodeHost  # pyright: ignore[reportMissingImports]
 from agent_pipeline.main import create_app  # pyright: ignore[reportMissingImports]
 
 
-class WebhookIntegrationTests(unittest.TestCase):
-    def test_duplicate_delivery_queues_only_one_plan_run(self) -> None:
+class WebhookIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_duplicate_delivery_queues_only_one_plan_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "app.db")
             host = GitHubCodeHost(
@@ -37,11 +37,17 @@ class WebhookIntegrationTests(unittest.TestCase):
             ).encode()
             headers = self._headers(body)
 
-            with TestClient(app) as client:
-                first = client.post("/webhooks/github", content=body, headers=headers)
-                duplicate = client.post(
-                    "/webhooks/github", content=body, headers=headers
-                )
+            transport = httpx.ASGITransport(app=app)
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="https://app.test"
+                ) as client:
+                    first = await client.post(
+                        "/webhooks/github", content=body, headers=headers
+                    )
+                    duplicate = await client.post(
+                        "/webhooks/github", content=body, headers=headers
+                    )
 
             claimed = database.claim_next_run()
             no_second_run = database.claim_next_run()

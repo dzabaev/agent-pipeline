@@ -77,12 +77,14 @@ class AgentResult:
     events: tuple[Mapping[str, Any], ...] = ()
 
 
-class CodeHost(Protocol):
+class WebhookParser(Protocol):
     def parse_webhook(
         self, headers: Mapping[str, str], body: bytes
     ) -> CodeHostEvent | None:
         raise RuntimeError("protocol method")
 
+
+class CodeHost(WebhookParser, Protocol):
     async def fetch_context(self, event: CodeHostEvent) -> ConversationContext:
         raise RuntimeError("protocol method")
 

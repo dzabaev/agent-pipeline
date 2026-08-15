@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_pipeline import settings
+from agent_pipeline import settings  # pyright: ignore[reportMissingImports]
 
 
 VALID = {

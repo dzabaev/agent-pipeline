@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent_pipeline.contracts import RunKind, RunStatus
+from .contracts import RunKind, RunStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +104,55 @@ class Database:
         except sqlite3.IntegrityError:
             return False
         return True
+
+    def ingest_run(
+        self,
+        *,
+        delivery_id: str,
+        event: str,
+        action: str,
+        payload_json: str,
+        issue_number: int,
+        kind: RunKind,
+        actor: str,
+        prompt_context: str,
+    ) -> str | None:
+        run_id = str(uuid.uuid4())
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO deliveries(
+                    id, event, action, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (delivery_id, event, action, payload_json, now),
+            ).rowcount
+            if not inserted:
+                connection.commit()
+                return None
+            connection.execute(
+                """
+                INSERT INTO runs(
+                    id, delivery_id, issue_number, kind, status, actor,
+                    prompt_context, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    delivery_id,
+                    issue_number,
+                    kind,
+                    RunStatus.QUEUED,
+                    actor,
+                    prompt_context,
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+        return run_id
 
     def enqueue_run(
         self,

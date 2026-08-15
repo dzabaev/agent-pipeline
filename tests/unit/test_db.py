@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_pipeline.contracts import RunKind, RunStatus
-from agent_pipeline.db import Database
+from agent_pipeline.contracts import RunKind, RunStatus  # pyright: ignore[reportMissingImports]
+from agent_pipeline.db import Database  # pyright: ignore[reportMissingImports]
 
 
 class DatabaseTests(unittest.TestCase):
