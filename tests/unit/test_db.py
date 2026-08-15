@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.contracts import RunKind, RunStatus
-from app.db import Database
+from agent_pipeline.contracts import RunKind, RunStatus
+from agent_pipeline.db import Database
 
 
 class DatabaseTests(unittest.TestCase):
@@ -30,6 +30,8 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertTrue(first)
         self.assertFalse(second)
+        if claimed is None:
+            self.fail("queued run was not claimed")
         self.assertEqual(claimed.id, run_id)
         self.assertEqual(claimed.status, RunStatus.RUNNING)
         self.assertIsNone(no_second_claim)

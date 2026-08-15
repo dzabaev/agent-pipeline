@@ -19,4 +19,4 @@ set -a
 source .env
 set +a
 
-exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "${PORT:-8000}" --workers 1
+exec .venv/bin/uvicorn agent_pipeline.main:app --host 127.0.0.1 --port "${PORT:-8000}" --workers 1

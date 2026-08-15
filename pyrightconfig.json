@@ -1,5 +1,5 @@
 {
-  "include": ["app", "tests"],
+  "include": ["agent_pipeline", "tests"],
   "extraPaths": ["."],
   "venvPath": ".",
   "venv": ".venv",

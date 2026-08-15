@@ -19,13 +19,13 @@ dependencies = [
 dev = []
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["agent_pipeline"]
 
 [tool.setuptools.package-data]
-app = ["templates/*.html", "static/*.css"]
+agent_pipeline = ["templates/*.html", "static/*.css"]
 
 [tool.pyright]
-include = ["app", "tests"]
+include = ["agent_pipeline", "tests"]
 extraPaths = ["."]
 venvPath = "."
 venv = ".venv"
