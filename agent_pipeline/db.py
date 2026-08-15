@@ -29,6 +29,19 @@ class RunRecord:
     updated_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class IssueRecord:
+    number: int
+    plan_run_id: str | None
+    plan_pr_number: int | None
+    plan_head_sha: str | None
+    plan_text: str | None
+    implementation_run_id: str | None
+    implementation_pr_number: int | None
+    created_at: str
+    updated_at: str
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -224,6 +237,56 @@ class Database:
             raise KeyError(run_id)
         return _run_from_row(row)
 
+    def record_plan(
+        self,
+        *,
+        issue_number: int,
+        run_id: str,
+        pull_request_number: int,
+        head_sha: str,
+        plan_text: str,
+    ) -> None:
+        now = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO issues(
+                    number, plan_run_id, plan_pr_number, plan_head_sha,
+                    plan_text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(number) DO UPDATE SET
+                    plan_run_id = excluded.plan_run_id,
+                    plan_pr_number = excluded.plan_pr_number,
+                    plan_head_sha = excluded.plan_head_sha,
+                    plan_text = excluded.plan_text,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    issue_number,
+                    run_id,
+                    pull_request_number,
+                    head_sha,
+                    plan_text,
+                    now,
+                    now,
+                ),
+            )
+
+    def get_issue(self, issue_number: int) -> IssueRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM issues WHERE number = ?", (issue_number,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(issue_number)
+        return _issue_from_row(row)
+
+    def find_issue(self, issue_number: int) -> IssueRecord | None:
+        try:
+            return self.get_issue(issue_number)
+        except KeyError:
+            return None
+
     def finish_run(
         self,
         run_id: str,
@@ -335,6 +398,20 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         branch=row["branch"],
         worktree_path=row["worktree_path"],
         github_url=row["github_url"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _issue_from_row(row: sqlite3.Row) -> IssueRecord:
+    return IssueRecord(
+        number=row["number"],
+        plan_run_id=row["plan_run_id"],
+        plan_pr_number=row["plan_pr_number"],
+        plan_head_sha=row["plan_head_sha"],
+        plan_text=row["plan_text"],
+        implementation_run_id=row["implementation_run_id"],
+        implementation_pr_number=row["implementation_pr_number"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

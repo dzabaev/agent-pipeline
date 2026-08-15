@@ -117,6 +117,45 @@ class WorktreeManager:
         output = await self._git("-C", str(worktree), "rev-parse", "HEAD")
         return output.decode().strip()
 
+    async def commit(self, worktree: Path, message: str) -> str:
+        if not await self.changed_files(worktree):
+            raise WorktreeError("cannot commit an empty worktree")
+        await self._git("-C", str(worktree), "add", "--all")
+        await self._git(
+            "-C",
+            str(worktree),
+            "-c",
+            "user.name=Agent Pipeline",
+            "-c",
+            "user.email=agent-pipeline@localhost",
+            "commit",
+            "-m",
+            message,
+        )
+        return await self.head(worktree)
+
+    async def run_command(
+        self,
+        worktree: Path,
+        command: tuple[str, ...],
+    ) -> str:
+        if not command:
+            raise WorktreeError("test command cannot be empty")
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=worktree,
+            env=self.git_environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await process.communicate()
+        output = stdout.decode(errors="replace")
+        if process.returncode:
+            raise WorktreeError(
+                f"command exited with code {process.returncode}: {output[-4000:]}"
+            )
+        return output
+
     async def _ensure_repository(self) -> None:
         if not self.repository_path.exists():
             self.repository_path.parent.mkdir(parents=True, exist_ok=True)

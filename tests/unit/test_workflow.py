@@ -76,7 +76,13 @@ class FakeWorktrees:
         return path
 
     async def changed_files(self, worktree: Path) -> tuple[str, ...]:
-        return ()
+        return tuple(
+            sorted(
+                str(path.relative_to(worktree))
+                for path in worktree.rglob("*")
+                if path.is_file()
+            )
+        )
 
     async def head(self, worktree: Path) -> str:
         return "base-sha"
@@ -84,6 +90,11 @@ class FakeWorktrees:
     async def commit(self, worktree: Path, message: str) -> str:
         self.commit_message = message
         return "plan-sha"
+
+    async def run_command(
+        self, worktree: Path, command: tuple[str, ...]
+    ) -> str:
+        return "tests passed"
 
     async def remove(self, path: Path) -> None:
         self.removed.append(path)
@@ -159,11 +170,12 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
             runner.run = _result_runner(runner, runner_output)
 
             outcome = await processor(run)
-            issue = database.get_issue(7)
+            issue = database.get_issue(issue_number=7)
             plan_path = runner.requests[0].worktree / "plans/issues/7.md"
+            plan_content = plan_path.read_text()
 
         self.assertEqual(outcome.github_url, "https://github.test/pulls/42")
-        self.assertEqual(plan_path.read_text(), runner_output)
+        self.assertEqual(plan_content, runner_output)
         self.assertEqual(issue.plan_pr_number, 42)
         self.assertEqual(issue.plan_text, runner_output)
         self.assertEqual(host.pushed[1], "agent/plan-7")
