@@ -19,6 +19,7 @@ from agent_pipeline.workflow import WorkflowProcessor  # pyright: ignore[reportM
 class FakeCodeHost:
     def __init__(self) -> None:
         self.comments: list[tuple[int, str]] = []
+        self.write_permission = True
 
     async def fetch_context(self, _event: object) -> ConversationContext:
         return ConversationContext(
@@ -30,9 +31,26 @@ class FakeCodeHost:
             base_sha="base-sha",
         )
 
+    async def has_write_permission(self, actor: str) -> bool:
+        return self.write_permission
+
     async def post_comment(self, issue_number: int, body: str) -> str:
         self.comments.append((issue_number, body))
         return "https://github.test/comments/1"
+
+    async def pull_request(self, number: int) -> PullRequest:
+        return PullRequest(
+            number=number,
+            url=f"https://github.test/pulls/{number}",
+            branch="agent/plan-7",
+            head_sha="plan-sha",
+        )
+
+    async def pull_request_files(self, number: int) -> dict[str, str]:
+        return {"plans/issues/7.md": "added"}
+
+    async def file_content(self, path: str, ref: str) -> str:
+        return "# Approved plan\n"
 
     async def push_branch(self, repository: Path, branch: str) -> None:
         self.pushed = (repository, branch)
@@ -46,11 +64,12 @@ class FakeCodeHost:
         body: str,
         draft: bool,
     ) -> PullRequest:
+        number = 43 if draft else 42
         return PullRequest(
-            number=42,
-            url="https://github.test/pulls/42",
+            number=number,
+            url=f"https://github.test/pulls/{number}",
             branch=branch,
-            head_sha="plan-sha",
+            head_sha="implementation-sha" if draft else "plan-sha",
         )
 
 
@@ -179,6 +198,59 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(issue.plan_pr_number, 42)
         self.assertEqual(issue.plan_text, runner_output)
         self.assertEqual(host.pushed[1], "agent/plan-7")
+
+    async def test_authorized_approval_creates_one_implementation_pr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="plan-run",
+                pull_request_number=42,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+            database.record_delivery(
+                "implementation-delivery", "issue_comment", "created", "{}"
+            )
+            database.enqueue_run(
+                delivery_id="implementation-delivery",
+                issue_number=7,
+                kind=RunKind.IMPLEMENTATION,
+                actor="alice",
+                prompt_context="yes",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            runner = FakeAgentRunner()
+            worktrees = FakeWorktrees(root / "worktrees")
+
+            async def implement(request: AgentRequest) -> AgentResult:
+                runner.requests.append(request)
+                (request.worktree / "feature.py").write_text("VALUE = 1\n")
+                return AgentResult(output="Implemented feature")
+
+            runner.run = implement
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=worktrees,
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            outcome = await processor(run)
+            issue = database.get_issue(issue_number=7)
+
+        self.assertEqual(outcome.github_url, "https://github.test/pulls/43")
+        self.assertEqual(runner.requests[0].kind, RunKind.IMPLEMENTATION)
+        self.assertEqual(issue.implementation_run_id, run.id)
+        self.assertEqual(issue.implementation_pr_number, 43)
+        self.assertEqual(host.pushed[1], "agent/issue-7")
 
 
 def _result_runner(runner: FakeAgentRunner, output: str):
