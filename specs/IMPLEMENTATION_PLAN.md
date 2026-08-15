@@ -204,7 +204,7 @@ pyproject.toml
 setup.sh         # idempotent environment bootstrap
 run.sh           # start one app process
 tests.sh         # run unit tests, then integration tests
-app/
+agent_pipeline/
   __init__.py
   main.py          # config loading, lifespan, routes, templates
   contracts.py     # normalized dataclasses and two Protocol boundaries

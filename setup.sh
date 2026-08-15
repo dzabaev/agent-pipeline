@@ -20,7 +20,7 @@ PY
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/python -m pip install --quiet --editable '.[dev]'
 
-if ! command -v pi >/dev/null && [ ! -x .tools/node_modules/.bin/pi ]; then
+if [ ! -x .tools/node_modules/.bin/pi ]; then
   npm install --silent --prefix .tools --ignore-scripts @earendil-works/pi-coding-agent@0.84.2
 fi
 
