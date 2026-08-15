@@ -3,7 +3,12 @@ import hmac
 import json
 import unittest
 
-from agent_pipeline.contracts import EventKind  # pyright: ignore[reportMissingImports]
+import httpx  # pyright: ignore[reportMissingImports]
+
+from agent_pipeline.contracts import (  # pyright: ignore[reportMissingImports]
+    CodeHostEvent,
+    EventKind,
+)  # pyright: ignore[reportMissingImports]
 from agent_pipeline.github import (  # pyright: ignore[reportMissingImports]
     GitHubCodeHost,
     WebhookRejected,
@@ -58,6 +63,55 @@ class GitHubWebhookTests(unittest.TestCase):
             "X-GitHub-Event": event,
             "X-Hub-Signature-256": f"sha256={digest}",
         }
+
+
+class GitHubApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetches_normalized_context_and_write_permission(self) -> None:
+        def respond(request: httpx.Request) -> httpx.Response:
+            responses = {
+                "/repos/owner/repository": {"default_branch": "main"},
+                "/repos/owner/repository/commits/main": {"sha": "base-sha"},
+                "/repos/owner/repository/issues/12": {
+                    "title": "Broken thing",
+                    "body": "Please fix it",
+                    "html_url": "https://github.test/issues/12",
+                },
+                "/repos/owner/repository/issues/12/comments": [
+                    {"user": {"login": "bob"}, "body": "I can reproduce"}
+                ],
+                "/repos/owner/repository/collaborators/alice/permission": {
+                    "permission": "write"
+                },
+            }
+            return httpx.Response(200, json=responses[request.url.path])
+
+        transport = httpx.MockTransport(respond)
+        async with httpx.AsyncClient(transport=transport) as client:
+            host = GitHubCodeHost(
+                repository="owner/repository",
+                token="token",
+                webhook_secret="secret",
+                bot_login="pipeline-bot",
+                api_url="https://api.github.test",
+                client=client,
+            )
+            event = CodeHostEvent(
+                delivery_id="delivery-1",
+                kind=EventKind.ISSUE_OPENED,
+                event_name="issues",
+                action="opened",
+                issue_number=12,
+                actor="alice",
+            )
+
+            context = await host.fetch_context(event)
+            can_write = await host.has_write_permission("alice")
+
+        self.assertEqual(context.title, "Broken thing")
+        self.assertEqual(context.comments, ("bob: I can reproduce",))
+        self.assertEqual(context.default_branch, "main")
+        self.assertEqual(context.base_sha, "base-sha")
+        self.assertTrue(can_write)
 
 
 if __name__ == "__main__":
