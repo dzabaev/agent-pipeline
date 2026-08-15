@@ -87,7 +87,7 @@ class GitHubApiTests(unittest.IsolatedAsyncioTestCase):
 
         transport = httpx.MockTransport(respond)
         async with httpx.AsyncClient(transport=transport) as client:
-            host = GitHubCodeHost(
+            host: GitHubCodeHost = GitHubCodeHost(
                 repository="owner/repository",
                 token="token",
                 webhook_secret="secret",

@@ -224,6 +224,88 @@ class Database:
             raise KeyError(run_id)
         return _run_from_row(row)
 
+    def finish_run(
+        self,
+        run_id: str,
+        *,
+        output: str,
+        github_url: str | None = None,
+        branch: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET status = ?, output = ?, error = NULL,
+                    github_url = ?, branch = ?, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    RunStatus.SUCCEEDED,
+                    output,
+                    github_url,
+                    branch,
+                    _now(),
+                    run_id,
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).rowcount
+        if not updated:
+            raise KeyError(run_id)
+
+    def fail_run(self, run_id: str, error: str) -> None:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET status = ?, error = ?, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    RunStatus.FAILED,
+                    error,
+                    _now(),
+                    run_id,
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).rowcount
+        if not updated:
+            raise KeyError(run_id)
+
+    def pending_count(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM runs
+                WHERE status IN (?, ?, ?)
+                """,
+                (
+                    RunStatus.QUEUED,
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).fetchone()
+        count = row["count"]
+        return count if isinstance(count, int) else 0
+
+    def mark_interrupted(self) -> int:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE runs SET status = ?, updated_at = ?
+                WHERE status IN (?, ?)
+                """,
+                (
+                    RunStatus.INTERRUPTED,
+                    _now(),
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).rowcount
+        return updated
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row

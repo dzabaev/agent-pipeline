@@ -52,6 +52,7 @@ class WorkerPoolTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(three_started.wait(), timeout=2)
             release.set()
             await asyncio.wait_for(all_done.wait(), timeout=2)
+            await pool.join(timeout=2)
             await pool.stop()
 
         self.assertEqual(peak, 3)
