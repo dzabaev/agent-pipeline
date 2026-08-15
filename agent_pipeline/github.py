@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import hmac
 import json
+import os
+from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
-from .contracts import CodeHostEvent, EventKind
+import httpx  # pyright: ignore[reportMissingImports]
+
+from .contracts import (
+    CodeHostEvent,
+    ConversationContext,
+    EventKind,
+    PullRequest,
+)
 
 
 PUBLICATION_MARKER = "<!-- agent-pipeline:"
@@ -13,6 +25,10 @@ PUBLICATION_MARKER = "<!-- agent-pipeline:"
 
 class WebhookRejected(ValueError):
     """Raised when a GitHub webhook cannot be trusted or decoded."""
+
+
+class GitHubError(RuntimeError):
+    """Raised when GitHub API or git publication fails."""
 
 
 class GitHubCodeHost:
@@ -24,12 +40,194 @@ class GitHubCodeHost:
         webhook_secret: str,
         bot_login: str,
         api_url: str,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self.repository = repository
         self.token = token
         self.webhook_secret = webhook_secret.encode()
         self.bot_login = bot_login.casefold()
         self.api_url = api_url.rstrip("/")
+        self._owns_client = client is None
+        self._client = client or httpx.AsyncClient(
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30,
+        )
+
+    @property
+    def remote_url(self) -> str:
+        host = urlsplit(self.api_url).hostname or "github.com"
+        if host == "api.github.com":
+            host = "github.com"
+        return f"https://{host}/{self.repository}.git"
+
+    async def close(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def fetch_context(self, event: CodeHostEvent) -> ConversationContext:
+        issue = await self._get_mapping(f"issues/{event.issue_number}")
+        repository = await self._get_mapping("")
+        default_branch = str(repository.get("default_branch", "main"))
+        commit = await self._get_mapping(f"commits/{default_branch}")
+        comments = await self._get_list(f"issues/{event.issue_number}/comments")
+        rendered_comments = tuple(
+            f"{_login(comment)}: {_text(comment.get('body'))}"
+            for comment in comments
+        )
+        return ConversationContext(
+            issue_number=event.issue_number,
+            title=_text(issue.get("title")),
+            body=_text(issue.get("body")),
+            source_url=_text(issue.get("html_url")),
+            comments=rendered_comments,
+            default_branch=default_branch,
+            base_sha=_text(commit.get("sha")),
+        )
+
+    async def has_write_permission(self, actor: str) -> bool:
+        response = await self._client.get(
+            self._url(f"collaborators/{actor}/permission")
+        )
+        if response.status_code == 404:
+            return False
+        self._raise_for_status(response)
+        permission = _response_mapping(response).get("permission")
+        return permission in {"write", "maintain", "admin"}
+
+    async def post_comment(self, issue_number: int, body: str) -> str:
+        response = await self._request(
+            "POST", f"issues/{issue_number}/comments", json={"body": body}
+        )
+        return _text(_response_mapping(response).get("html_url"))
+
+    async def pull_request(self, number: int) -> PullRequest:
+        return _pull_request(await self._get_mapping(f"pulls/{number}"))
+
+    async def pull_request_files(self, number: int) -> Mapping[str, str]:
+        files = await self._get_list(f"pulls/{number}/files")
+        return {
+            _text(item.get("filename")): _text(item.get("status"))
+            for item in files
+        }
+
+    async def file_content(self, path: str, ref: str) -> str:
+        response = await self._request(
+            "GET", f"contents/{path}", params={"ref": ref}
+        )
+        payload = _response_mapping(response)
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise GitHubError(f"GitHub returned no content for {path}")
+        try:
+            return base64.b64decode(content).decode()
+        except (ValueError, UnicodeDecodeError) as error:
+            raise GitHubError(f"GitHub returned invalid content for {path}") from error
+
+    async def push_branch(self, repository: Path, branch: str) -> None:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(repository),
+            "push",
+            "origin",
+            f"HEAD:refs/heads/{branch}",
+            "--force-with-lease",
+            env=self._git_environment(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode:
+            detail = stderr.decode(errors="replace").strip()
+            raise GitHubError(f"git push failed: {detail}")
+
+    async def open_pull_request(
+        self,
+        *,
+        issue_number: int,
+        branch: str,
+        title: str,
+        body: str,
+        draft: bool,
+    ) -> PullRequest:
+        response = await self._request(
+            "POST",
+            "pulls",
+            json={
+                "title": title,
+                "head": branch,
+                "base": await self.default_branch(),
+                "body": f"{body}\n\n<!-- agent-pipeline-issue:{issue_number} -->",
+                "draft": draft,
+            },
+        )
+        return _pull_request(_response_mapping(response))
+
+    async def default_branch(self) -> str:
+        repository = await self._get_mapping("")
+        return _text(repository.get("default_branch")) or "main"
+
+    async def _get_mapping(self, path: str) -> Mapping[str, Any]:
+        return _response_mapping(await self._request("GET", path))
+
+    async def _get_list(self, path: str) -> list[Mapping[str, Any]]:
+        items: list[Mapping[str, Any]] = []
+        page = 1
+        while True:
+            response = await self._request(
+                "GET", path, params={"per_page": 100, "page": page}
+            )
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise GitHubError("GitHub returned an invalid list response")
+            page_items = [_mapping(item) for item in payload]
+            items.extend(page_items)
+            if len(page_items) < 100:
+                return items
+            page += 1
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        response = await self._client.request(method, self._url(path), **kwargs)
+        self._raise_for_status(response)
+        return response
+
+    def _url(self, path: str) -> str:
+        base = f"{self.api_url}/repos/{self.repository}"
+        return f"{base}/{path}" if path else base
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        if response.is_success:
+            return
+        detail = response.text[-2000:]
+        raise GitHubError(f"GitHub API returned {response.status_code}: {detail}")
+
+    def _git_environment(self) -> dict[str, str]:
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET"}
+        }
+        credential = base64.b64encode(
+            f"x-access-token:{self.token}".encode()
+        ).decode()
+        host = urlsplit(self.remote_url).hostname or "github.com"
+        environment.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": f"http.https://{host}/.extraheader",
+                "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {credential}",
+            }
+        )
+        return environment
 
     def parse_webhook(
         self,
@@ -193,6 +391,36 @@ def _event(
         pull_request_number=pull_request_number,
         raw_payload=payload,
     )
+
+
+def _pull_request(payload: Mapping[str, Any]) -> PullRequest:
+    head = _mapping(payload.get("head"))
+    return PullRequest(
+        number=_number(payload),
+        url=_text(payload.get("html_url")),
+        branch=_text(head.get("ref")),
+        head_sha=_text(head.get("sha")),
+        merged=bool(payload.get("merged")),
+    )
+
+
+def _response_mapping(response: httpx.Response) -> Mapping[str, Any]:
+    try:
+        payload = response.json()
+    except json.JSONDecodeError as error:
+        raise GitHubError("GitHub returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise GitHubError("GitHub returned an invalid object response")
+    return payload
+
+
+def _login(payload: Mapping[str, Any]) -> str:
+    user = payload.get("user")
+    return _text(user.get("login")) if isinstance(user, dict) else "unknown"
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _mapping(value: object) -> Mapping[str, Any]:

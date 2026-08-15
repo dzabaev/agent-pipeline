@@ -85,6 +85,10 @@ class WebhookParser(Protocol):
 
 
 class CodeHost(WebhookParser, Protocol):
+    @property
+    def remote_url(self) -> str:
+        raise RuntimeError("protocol method")
+
     async def fetch_context(self, event: CodeHostEvent) -> ConversationContext:
         raise RuntimeError("protocol method")
 
@@ -98,6 +102,9 @@ class CodeHost(WebhookParser, Protocol):
         raise RuntimeError("protocol method")
 
     async def pull_request_files(self, number: int) -> Mapping[str, str]:
+        raise RuntimeError("protocol method")
+
+    async def file_content(self, path: str, ref: str) -> str:
         raise RuntimeError("protocol method")
 
     async def push_branch(self, repository: Path, branch: str) -> None:
