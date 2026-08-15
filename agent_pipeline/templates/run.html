@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if run.status in ('queued', 'running', 'publishing') %}<meta http-equiv="refresh" content="5">{% endif %}
+  <title>Run {{ run.id }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+  <main>
+    <p><a href="/">← All runs</a></p>
+    <h1>{{ run.kind }} for issue #{{ run.issue_number }}</h1>
+    <dl>
+      <dt>Status</dt><dd><span class="status status-{{ run.status }}">{{ run.status }}</span></dd>
+      <dt>Actor</dt><dd>{{ run.actor }}</dd>
+      <dt>Attempt</dt><dd>{{ run.attempt }}</dd>
+      <dt>Created</dt><dd>{{ run.created_at }}</dd>
+      {% if run.github_url %}<dt>GitHub</dt><dd><a href="{{ run.github_url }}">{{ run.github_url }}</a></dd>{% endif %}
+    </dl>
+    {% if run.status in ('failed', 'interrupted') %}
+    <form method="post" action="/runs/{{ run.id }}/retry">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Retry</button>
+    </form>
+    {% endif %}
+    {% if run.error %}<h2>Error</h2><pre class="error">{{ run.error }}</pre>{% endif %}
+    {% if run.output %}<h2>Output</h2><pre>{{ run.output }}</pre>{% endif %}
+  </main>
+</body>
+</html>

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import (  # pyright: ignore[reportMissingImports]
     FastAPI,
@@ -9,6 +15,9 @@ from fastapi import (  # pyright: ignore[reportMissingImports]
     Request,
     status,
 )
+from fastapi.responses import RedirectResponse  # pyright: ignore[reportMissingImports]
+from fastapi.staticfiles import StaticFiles  # pyright: ignore[reportMissingImports]
+from fastapi.templating import Jinja2Templates  # pyright: ignore[reportMissingImports]
 
 from .contracts import AgentRunner, CodeHost, EventKind, RunKind
 from .db import Database
@@ -24,6 +33,47 @@ from .workflow import (  # pyright: ignore[reportMissingImports]
     is_implementation_command,
 )
 from .worktrees import WorktreeManager  # pyright: ignore[reportMissingImports]
+
+
+_PACKAGE_ROOT = Path(__file__).parent
+_TEMPLATES = Jinja2Templates(directory=_PACKAGE_ROOT / "templates")
+
+
+def _require_dashboard(
+    request: Request,
+    settings: Settings | None,
+) -> Settings:
+    if settings is None:
+        raise HTTPException(status_code=503, detail="dashboard is not configured")
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, encoded = authorization.partition(" ")
+    username = ""
+    provided_value = ""
+    if separator and scheme.casefold() == "basic":
+        try:
+            decoded = base64.b64decode(encoded, validate=True).decode()
+            username, credential_separator, provided_value = decoded.partition(":")
+            if not credential_separator:
+                username = provided_value = ""
+        except (binascii.Error, UnicodeDecodeError):
+            username = provided_value = ""
+    valid_username = secrets.compare_digest(username, settings.dashboard_user)
+    valid_credential = secrets.compare_digest(
+        provided_value, settings.dashboard_password
+    )
+    if not (valid_username and valid_credential):
+        raise HTTPException(
+            status_code=401,
+            detail="authentication required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return settings
+
+
+def _csrf_token(credential: str, run_id: str) -> str:
+    return hmac.new(
+        credential.encode(), run_id.encode(), hashlib.sha256
+    ).hexdigest()
 
 
 @asynccontextmanager
@@ -105,6 +155,59 @@ def create_app(
     app.state.database = active_database
     app.state.code_host = active_code_host
     app.state.worker_pool = pool
+    app.mount(
+        "/static",
+        StaticFiles(directory=_PACKAGE_ROOT / "static"),
+        name="static",
+    )
+
+    @app.get("/")
+    async def dashboard(request: Request):
+        dashboard_settings = _require_dashboard(request, configured)
+        runs = active_database.list_runs()
+        return _TEMPLATES.TemplateResponse(
+            request=request,
+            name="dashboard.html",
+            context={
+                "runs": runs,
+                "deliveries": active_database.list_deliveries(),
+                "csrf": lambda run_id: _csrf_token(
+                    dashboard_settings.dashboard_password, run_id
+                ),
+            },
+        )
+
+    @app.get("/runs/{run_id}")
+    async def run_detail(request: Request, run_id: str):
+        dashboard_settings = _require_dashboard(request, configured)
+        try:
+            run = active_database.get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="run not found") from error
+        return _TEMPLATES.TemplateResponse(
+            request=request,
+            name="run.html",
+            context={
+                "run": run,
+                "csrf": _csrf_token(
+                    dashboard_settings.dashboard_password, run_id
+                ),
+            },
+        )
+
+    @app.post("/runs/{run_id}/retry")
+    async def retry_run(request: Request, run_id: str) -> RedirectResponse:
+        dashboard_settings = _require_dashboard(request, configured)
+        form = await request.form()
+        supplied = form.get("csrf")
+        expected = _csrf_token(dashboard_settings.dashboard_password, run_id)
+        if not isinstance(supplied, str) or not secrets.compare_digest(
+            supplied, expected
+        ):
+            raise HTTPException(status_code=403, detail="invalid CSRF token")
+        if not active_database.retry_run(run_id):
+            raise HTTPException(status_code=409, detail="run cannot be retried")
+        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.post("/webhooks/github", status_code=status.HTTP_202_ACCEPTED)
     async def github_webhook(request: Request) -> dict[str, str]:

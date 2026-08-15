@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #111; color: #eee; }
+main { width: min(1100px, calc(100% - 2rem)); margin: 2rem auto; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+h1, h2 { line-height: 1.1; }
+a { color: #8cc8ff; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: #191919; }
+th, td { padding: .7rem; border-bottom: 1px solid #333; text-align: left; vertical-align: top; }
+code, pre { font-family: ui-monospace, monospace; }
+pre { overflow: auto; padding: 1rem; background: #191919; white-space: pre-wrap; }
+button { padding: .45rem .75rem; cursor: pointer; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .5rem 1rem; }
+dt { font-weight: 700; }
+.status { font-weight: 700; }
+.status-succeeded { color: #70dc8d; }
+.status-failed, .error { color: #ff8b8b; }
+.status-running, .status-publishing { color: #ffd166; }
+@media (prefers-color-scheme: light) {
+  body { background: #fff; color: #181818; }
+  table, pre { background: #f6f6f6; }
+  th, td { border-color: #ddd; }
+  a { color: #005ea8; }
+}

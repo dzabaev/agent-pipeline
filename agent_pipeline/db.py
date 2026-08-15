@@ -30,6 +30,15 @@ class RunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryRecord:
+    id: str
+    event: str
+    action: str
+    disposition: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class IssueRecord:
     number: int
     plan_run_id: str | None
@@ -237,6 +246,44 @@ class Database:
             raise KeyError(run_id)
         return _run_from_row(row)
 
+    def list_runs(self, limit: int = 100) -> tuple[RunRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(_run_from_row(row) for row in rows)
+
+    def list_deliveries(self, limit: int = 100) -> tuple[DeliveryRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, event, action, disposition, created_at
+                FROM deliveries ORDER BY created_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return tuple(_delivery_from_row(row) for row in rows)
+
+    def retry_run(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET status = ?, error = NULL, output = NULL,
+                    worktree_path = NULL, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    RunStatus.QUEUED,
+                    _now(),
+                    run_id,
+                    RunStatus.FAILED,
+                    RunStatus.INTERRUPTED,
+                ),
+            ).rowcount
+        return bool(updated)
+
     def record_plan(
         self,
         *,
@@ -434,6 +481,16 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         github_url=row["github_url"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _delivery_from_row(row: sqlite3.Row) -> DeliveryRecord:
+    return DeliveryRecord(
+        id=row["id"],
+        event=row["event"],
+        action=row["action"],
+        disposition=row["disposition"],
+        created_at=row["created_at"],
     )
 
 
