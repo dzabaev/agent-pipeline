@@ -9,6 +9,7 @@ from agent_pipeline.contracts import (  # pyright: ignore[reportMissingImports]
     AgentRunner,
     CodeHost,
     ConversationContext,
+    PullRequest,
     RunKind,
 )
 from agent_pipeline.db import Database  # pyright: ignore[reportMissingImports]
@@ -32,6 +33,25 @@ class FakeCodeHost:
     async def post_comment(self, issue_number: int, body: str) -> str:
         self.comments.append((issue_number, body))
         return "https://github.test/comments/1"
+
+    async def push_branch(self, repository: Path, branch: str) -> None:
+        self.pushed = (repository, branch)
+
+    async def open_pull_request(
+        self,
+        *,
+        issue_number: int,
+        branch: str,
+        title: str,
+        body: str,
+        draft: bool,
+    ) -> PullRequest:
+        return PullRequest(
+            number=42,
+            url="https://github.test/pulls/42",
+            branch=branch,
+            head_sha="plan-sha",
+        )
 
 
 class FakeAgentRunner:
@@ -57,6 +77,13 @@ class FakeWorktrees:
 
     async def changed_files(self, worktree: Path) -> tuple[str, ...]:
         return ()
+
+    async def head(self, worktree: Path) -> str:
+        return "base-sha"
+
+    async def commit(self, worktree: Path, message: str) -> str:
+        self.commit_message = message
+        return "plan-sha"
 
     async def remove(self, path: Path) -> None:
         self.removed.append(path)
@@ -100,6 +127,54 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Suggested answer", host.comments[0][1])
         self.assertIn("<!-- agent-pipeline:", host.comments[0][1])
         self.assertEqual(worktrees.removed, [runner.requests[0].worktree])
+
+    async def test_new_issue_creates_plan_only_pull_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_delivery("delivery-2", "issues", "opened", "{}")
+            database.enqueue_run(
+                delivery_id="delivery-2",
+                issue_number=7,
+                kind=RunKind.PLAN,
+                actor="alice",
+                prompt_context="Something broke",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            runner = FakeAgentRunner()
+            worktrees = FakeWorktrees(root / "worktrees")
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=worktrees,
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+            runner_output = "# Plan\n\n1. Add regression test.\n"
+            runner.run = _result_runner(runner, runner_output)
+
+            outcome = await processor(run)
+            issue = database.get_issue(7)
+            plan_path = runner.requests[0].worktree / "plans/issues/7.md"
+
+        self.assertEqual(outcome.github_url, "https://github.test/pulls/42")
+        self.assertEqual(plan_path.read_text(), runner_output)
+        self.assertEqual(issue.plan_pr_number, 42)
+        self.assertEqual(issue.plan_text, runner_output)
+        self.assertEqual(host.pushed[1], "agent/plan-7")
+
+
+def _result_runner(runner: FakeAgentRunner, output: str):
+    async def run(request: AgentRequest) -> AgentResult:
+        runner.requests.append(request)
+        return AgentResult(output=output)
+
+    return run
 
 
 if __name__ == "__main__":
