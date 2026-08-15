@@ -23,3 +23,10 @@ packages = ["app"]
 
 [tool.setuptools.package-data]
 app = ["templates/*.html", "static/*.css"]
+
+[tool.pyright]
+include = ["app", "tests"]
+extraPaths = ["."]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"

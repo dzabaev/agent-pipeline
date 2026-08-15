@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.config import ConfigError, Settings
+from app import settings
 
 
 VALID = {
@@ -30,13 +30,13 @@ class SettingsTests(unittest.TestCase):
     def test_loads_valid_settings_and_resolves_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            settings = Settings.from_mapping(VALID, root=root)
+            loaded = settings.Settings.from_mapping(VALID, root=root)
 
-        self.assertEqual(settings.max_concurrent_agents, 3)
-        self.assertEqual(settings.github_owner, "owner")
-        self.assertEqual(settings.github_name, "repository")
-        self.assertEqual(settings.database_path, root / "var/app.db")
-        self.assertEqual(settings.worktree_root, root / "var/worktrees")
+        self.assertEqual(loaded.max_concurrent_agents, 3)
+        self.assertEqual(loaded.github_owner, "owner")
+        self.assertEqual(loaded.github_name, "repository")
+        self.assertEqual(loaded.database_path, root / "var/app.db")
+        self.assertEqual(loaded.worktree_root, root / "var/worktrees")
 
     def test_rejects_missing_secrets_and_invalid_concurrency(self) -> None:
         values = VALID | {
@@ -45,8 +45,8 @@ class SettingsTests(unittest.TestCase):
             "MAX_CONCURRENT_AGENTS": "0",
         }
 
-        with self.assertRaises(ConfigError) as raised:
-            Settings.from_mapping(values)
+        with self.assertRaises(settings.ConfigError) as raised:
+            settings.Settings.from_mapping(values)
 
         message = str(raised.exception)
         self.assertIn("GITHUB_TOKEN", message)
