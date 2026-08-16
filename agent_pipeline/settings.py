@@ -22,6 +22,7 @@ class Settings:
     agent_timeout_seconds: int
     pi_executable: str
     pi_runner_user: str | None
+    test_runner_user: str | None
     test_command: str
     github_repository: str
     github_token: str
@@ -84,9 +85,23 @@ class Settings:
         if port > 65535:
             errors.append("PORT must be at most 65535")
 
+        app_env = values.get("APP_ENV", "development").strip() or "development"
+        pi_runner_user = values.get("PI_RUNNER_USER", "").strip() or None
+        test_runner_user = values.get("TEST_RUNNER_USER", "").strip() or None
+        if app_env == "production":
+            service_user = values.get("SERVICE_USER", "agent-pipeline").strip()
+            if pi_runner_user is None:
+                errors.append("PI_RUNNER_USER is required in production")
+            if test_runner_user is None:
+                errors.append("TEST_RUNNER_USER is required in production")
+            if pi_runner_user == test_runner_user and pi_runner_user is not None:
+                errors.append("PI_RUNNER_USER and TEST_RUNNER_USER must differ")
+            if service_user in {pi_runner_user, test_runner_user}:
+                errors.append("runner users must differ from SERVICE_USER")
+
         settings = cls(
             root=project_root,
-            app_env=values.get("APP_ENV", "development").strip() or "development",
+            app_env=app_env,
             port=port,
             database_path=path("DATABASE_PATH", "var/agent-pipeline.db"),
             repository_path=path("REPOSITORY_PATH", "var/repository.git"),
@@ -94,7 +109,8 @@ class Settings:
             max_concurrent_agents=positive_int("MAX_CONCURRENT_AGENTS", "1"),
             agent_timeout_seconds=positive_int("AGENT_TIMEOUT_SECONDS", "1800"),
             pi_executable=values.get("PI_EXECUTABLE", "pi").strip() or "pi",
-            pi_runner_user=values.get("PI_RUNNER_USER", "").strip() or None,
+            pi_runner_user=pi_runner_user,
+            test_runner_user=test_runner_user,
             test_command=values.get("TEST_COMMAND", "./tests.sh").strip()
             or "./tests.sh",
             github_repository=repository,

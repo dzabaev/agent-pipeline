@@ -106,6 +106,15 @@ class FakeWorktrees:
             )
         )
 
+    async def snapshot(self, worktree: Path) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (name, (worktree / name).read_bytes().hex())
+            for name in await self.changed_files(worktree)
+        )
+
+    async def restore_git_metadata(self, worktree: Path) -> None:
+        return None
+
     async def head(self, worktree: Path) -> str:
         return "base-sha"
 
@@ -114,7 +123,10 @@ class FakeWorktrees:
         return "plan-sha"
 
     async def run_command(
-        self, worktree: Path, command: tuple[str, ...]
+        self,
+        worktree: Path,
+        command: tuple[str, ...],
+        timeout_seconds: int,
     ) -> str:
         return "tests passed"
 

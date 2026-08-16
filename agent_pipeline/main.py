@@ -19,12 +19,9 @@ from fastapi.responses import RedirectResponse  # pyright: ignore[reportMissingI
 from fastapi.staticfiles import StaticFiles  # pyright: ignore[reportMissingImports]
 from fastapi.templating import Jinja2Templates  # pyright: ignore[reportMissingImports]
 
-from .contracts import AgentRunner, CodeHost, EventKind, RunKind
+from .contracts import AgentRunner, CodeHost, EventKind, RunKind, WebhookError
 from .db import Database
-from .github import (  # pyright: ignore[reportMissingImports]
-    GitHubCodeHost,
-    WebhookRejected,
-)
+from .github import GitHubCodeHost  # pyright: ignore[reportMissingImports]
 from .pi import PiAgentRunner  # pyright: ignore[reportMissingImports]
 from .settings import Settings
 from .worker import WorkerPool  # pyright: ignore[reportMissingImports]
@@ -81,6 +78,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.database.initialize()
     pool: WorkerPool | None = app.state.worker_pool
     host: CodeHost = app.state.code_host
+    worktrees: WorktreeManager | None = app.state.worktrees
+    if worktrees is not None:
+        await worktrees.cleanup_all()
     if pool is not None:
         await pool.start()
     try:
@@ -123,6 +123,7 @@ def create_app(
         )
 
     pool: WorkerPool | None = None
+    active_worktrees: WorktreeManager | None = None
     if start_workers:
         if configured is None:
             raise RuntimeError("settings are required to start workers")
@@ -135,6 +136,7 @@ def create_app(
             worktree_root=configured.worktree_root,
             remote_url=active_code_host.remote_url,
             git_environment=active_code_host.git_environment,
+            test_runner_user=configured.test_runner_user,
         )
         processor = WorkflowProcessor(
             database=active_database,
@@ -155,6 +157,7 @@ def create_app(
     app.state.database = active_database
     app.state.code_host = active_code_host
     app.state.worker_pool = pool
+    app.state.worktrees = active_worktrees
     app.mount(
         "/static",
         StaticFiles(directory=_PACKAGE_ROOT / "static"),
@@ -214,7 +217,7 @@ def create_app(
         body = await request.body()
         try:
             event = active_code_host.parse_webhook(request.headers, body)
-        except WebhookRejected as error:
+        except WebhookError as error:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid GitHub webhook",
@@ -232,22 +235,60 @@ def create_app(
             ),
             EventKind.PLAN_MERGED: RunKind.IMPLEMENTATION,
         }[event.kind]
+        reply_number = event.pull_request_number or event.issue_number
+        issue_number = event.issue_number
+        if event.pull_request_number is not None:
+            mapped_issue = active_database.issue_for_pull_request(
+                event.pull_request_number
+            )
+            if event.kind is EventKind.PLAN_MERGED and mapped_issue is None:
+                return {"status": "ignored"}
+            issue_number = mapped_issue or issue_number
+        reserve_implementation = False
+        if run_kind is RunKind.IMPLEMENTATION:
+            issue = active_database.find_issue(issue_number)
+            if issue is not None and issue.plan_pr_number is not None:
+                reserve_implementation = await active_code_host.has_write_permission(
+                    event.actor
+                )
         run_id = active_database.ingest_run(
             delivery_id=event.delivery_id,
             event=event.event_name,
             action=event.action,
             payload_json=body.decode("utf-8"),
-            issue_number=event.issue_number,
+            issue_number=issue_number,
+            reply_number=reply_number,
             kind=run_kind,
             actor=event.actor,
             prompt_context=event.body,
+            reserve_implementation=reserve_implementation,
         )
-        if run_id is None:
+        if run_id is None and not reserve_implementation:
             return {"status": "duplicate"}
+        if not run_id:
+            issue = active_database.get_issue(issue_number)
+            message = "Implementation is already running."
+            if issue.implementation_pr_number is not None:
+                pull_request = await active_code_host.pull_request(
+                    issue.implementation_pr_number
+                )
+                message = (
+                    "Implementation pull request already exists: "
+                    f"{pull_request.url}"
+                )
+            marker = f"<!-- agent-pipeline:{event.delivery_id} -->"
+            await active_code_host.post_comment(
+                reply_number,
+                f"{message}\n\n{marker}",
+            )
+            return {
+                "status": "duplicate" if run_id is None else "already_queued"
+            }
         return {"status": "queued", "run_id": run_id}
 
     @app.get("/healthz")
     async def health() -> dict[str, str]:
+        active_database.healthcheck()
         return {"status": "ok"}
 
     return app

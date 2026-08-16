@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 
+class WebhookError(ValueError):
+    """Raised when a code-host webhook cannot be trusted or decoded."""
+
+
 class EventKind(StrEnum):
     ISSUE_OPENED = "issue_opened"
     COMMENT = "comment"

@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=agent-pipeline
 Group=agent-pipeline
+SupplementaryGroups=agent-runs
 WorkingDirectory=/opt/agent-pipeline
 EnvironmentFile=/etc/agent-pipeline.env
 Environment=ENV_FILE=/etc/agent-pipeline.env
@@ -15,9 +16,10 @@ ExecStart=/opt/agent-pipeline/run.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
-UMask=0077
+UMask=0027
 
-NoNewPrivileges=true
+# Constrained sudo starts Pi/tests as lower-privilege users.
+NoNewPrivileges=false
 PrivateDevices=true
 PrivateTmp=true
 ProtectClock=true
@@ -28,8 +30,8 @@ ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/agent-pipeline
-RestrictNamespaces=true
+ReadWritePaths=/var/lib/agent-pipeline /var/lib/pi-runner /var/lib/agent-pipeline-test
+RestrictNamespaces=~cgroup net
 RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native

@@ -54,6 +54,74 @@ class DatabaseTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
 
+    def test_merge_and_approval_ingest_one_implementation_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=9,
+                run_id="plan-run",
+                pull_request_number=10,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+
+            first = database.ingest_run(
+                delivery_id="merge",
+                event="pull_request",
+                action="closed",
+                payload_json="{}",
+                issue_number=9,
+                kind=RunKind.IMPLEMENTATION,
+                actor="alice",
+                prompt_context="",
+                reserve_implementation=True,
+            )
+            second = database.ingest_run(
+                delivery_id="approval",
+                event="issue_comment",
+                action="created",
+                payload_json="{}",
+                issue_number=9,
+                kind=RunKind.IMPLEMENTATION,
+                actor="alice",
+                prompt_context="yes",
+                reserve_implementation=True,
+            )
+            run_count = len(database.list_runs())
+
+        self.assertTrue(first)
+        self.assertEqual(second, "")
+        self.assertEqual(run_count, 1)
+
+    def test_failed_run_releases_unpublished_implementation_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "app.db")
+            database.initialize()
+            database.record_delivery("delivery", "issue_comment", "created", "{}")
+            run_id = database.enqueue_run(
+                delivery_id="delivery",
+                issue_number=9,
+                kind=RunKind.IMPLEMENTATION,
+                actor="alice",
+                prompt_context="implement",
+            )
+            database.record_plan(
+                issue_number=9,
+                run_id="plan-run",
+                pull_request_number=10,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+            claimed = database.claim_next_run()
+            if claimed is None:
+                self.fail("implementation run was not claimed")
+            self.assertTrue(database.reserve_implementation(9, run_id))
+
+            database.fail_run(run_id, "failed")
+
+            self.assertTrue(database.reserve_implementation(9, "retry-run"))
+
 
 if __name__ == "__main__":
     unittest.main()

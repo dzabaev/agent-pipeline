@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 from pathlib import Path
 from typing import Any, Mapping
 
 from .contracts import AgentRequest, AgentResult
+from .process import terminate_process_group
 
 
 class AgentExecutionError(RuntimeError):
@@ -37,7 +37,56 @@ class PiAgentRunner:
             request.prompt,
         ]
         if self.runner_user:
-            command = ["sudo", "-n", "-u", self.runner_user, "--", *command]
+            worktree_root = request.worktree.parent
+            command = [
+                "sudo",
+                "-n",
+                "-H",
+                "-u",
+                self.runner_user,
+                "--",
+                "/usr/bin/bwrap",
+                "--die-with-parent",
+                "--new-session",
+                "--unshare-pid",
+                "--unshare-ipc",
+                "--unshare-uts",
+                "--ro-bind",
+                "/",
+                "/",
+                "--tmpfs",
+                "/mnt",
+                "--dir",
+                "/mnt/agent-pipeline",
+                "--dir",
+                "/mnt/agent-pipeline/worktree",
+                "--bind",
+                str(request.worktree),
+                "/mnt/agent-pipeline/worktree",
+                "--tmpfs",
+                str(worktree_root),
+                "--dir",
+                str(request.worktree),
+                "--bind",
+                "/mnt/agent-pipeline/worktree",
+                str(request.worktree),
+                "--tmpfs",
+                "/tmp",
+                "--tmpfs",
+                "/var/tmp",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--chdir",
+                str(request.worktree),
+                "--",
+                "/bin/sh",
+                "-c",
+                'umask 0007; exec "$@"',
+                "agent-pipeline",
+                *command,
+            ]
 
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -52,14 +101,12 @@ class PiAgentRunner:
                 process.communicate(), timeout=request.timeout_seconds
             )
         except TimeoutError as error:
-            _stop_process_group(process.pid)
-            await process.wait()
+            await terminate_process_group(process)
             raise AgentExecutionError(
                 f"Pi timed out after {request.timeout_seconds} seconds"
             ) from error
         except asyncio.CancelledError:
-            _stop_process_group(process.pid)
-            await process.wait()
+            await terminate_process_group(process)
             raise
 
         if process.returncode:
@@ -81,7 +128,11 @@ def _sanitized_environment() -> dict[str, str]:
         "GITHUB_TOKEN",
         "GITHUB_WEBHOOK_SECRET",
     }
-    return {key: value for key, value in os.environ.items() if key not in blocked}
+    environment = {
+        key: value for key, value in os.environ.items() if key not in blocked
+    }
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    return environment
 
 
 def _parse_events(output: bytes) -> list[Mapping[str, Any]]:
@@ -121,12 +172,3 @@ def _final_text(events: list[Mapping[str, Any]]) -> str:
         if text:
             return text
     return ""
-
-
-def _stop_process_group(pid: int | None) -> None:
-    if pid is None:
-        return
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return

@@ -35,6 +35,12 @@ class Workspace(Protocol):
     async def changed_files(self, worktree: Path) -> tuple[str, ...]:
         raise RuntimeError("protocol method")
 
+    async def snapshot(self, worktree: Path) -> tuple[tuple[str, str], ...]:
+        raise RuntimeError("protocol method")
+
+    async def restore_git_metadata(self, worktree: Path) -> None:
+        raise RuntimeError("protocol method")
+
     async def head(self, worktree: Path) -> str:
         raise RuntimeError("protocol method")
 
@@ -42,7 +48,10 @@ class Workspace(Protocol):
         raise RuntimeError("protocol method")
 
     async def run_command(
-        self, worktree: Path, command: tuple[str, ...]
+        self,
+        worktree: Path,
+        command: tuple[str, ...],
+        timeout_seconds: int,
     ) -> str:
         raise RuntimeError("protocol method")
 
@@ -145,7 +154,7 @@ class WorkflowProcessor:
             )
             marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
             await self.code_host.post_comment(
-                run.issue_number,
+                run.reply_number,
                 f"Plan ready: {pull_request.url}\n\n{marker}",
             )
             return RunOutcome(
@@ -173,18 +182,46 @@ class WorkflowProcessor:
                 note="Explain that only collaborators with write access may approve implementation.",
             )
 
+        if issue.implementation_pr_number is not None:
+            pull_request = await self.code_host.pull_request(
+                issue.implementation_pr_number
+            )
+            message = "Implementation pull request already exists."
+            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
+            await self.code_host.post_comment(
+                run.reply_number,
+                f"{message} {pull_request.url}\n\n{marker}",
+            )
+            return RunOutcome(
+                output=message,
+                github_url=pull_request.url,
+                branch=pull_request.branch,
+            )
+
         if not self.database.reserve_implementation(run.issue_number, run.id):
             current = self.database.get_issue(run.issue_number)
             if current.implementation_pr_number is not None:
                 pull_request = await self.code_host.pull_request(
                     current.implementation_pr_number
                 )
+                message = "Implementation pull request already exists."
+                marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
+                await self.code_host.post_comment(
+                    run.reply_number,
+                    f"{message} {pull_request.url}\n\n{marker}",
+                )
                 return RunOutcome(
-                    output="Implementation pull request already exists.",
+                    output=message,
                     github_url=pull_request.url,
                     branch=pull_request.branch,
                 )
-            return RunOutcome(output="Implementation is already running.")
+            message = "Implementation is already running."
+            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
+            await self.code_host.post_comment(
+                run.reply_number,
+                f"{message}\n\n{marker}",
+            )
+            return RunOutcome(output=message)
 
         plan_pull_request = await self.code_host.pull_request(issue.plan_pr_number)
         expected_plan = f"plans/issues/{run.issue_number}.md"
@@ -241,10 +278,18 @@ class WorkflowProcessor:
             if any(path.startswith(".github/workflows/") for path in changed):
                 raise WorkflowError("workflow changes are not allowed")
 
+            before_tests = await self.worktrees.snapshot(worktree)
             test_command = tuple(shlex.split(self.test_command))
             if not test_command:
                 raise WorkflowError("test command is empty")
-            await self.worktrees.run_command(worktree, test_command)
+            await self.worktrees.run_command(
+                worktree,
+                test_command,
+                self.agent_timeout_seconds,
+            )
+            await self.worktrees.restore_git_metadata(worktree)
+            if await self.worktrees.snapshot(worktree) != before_tests:
+                raise WorkflowError("test command modified implementation output")
             await self.worktrees.commit(
                 worktree, f"feat: implement issue {run.issue_number}"
             )
@@ -263,7 +308,7 @@ class WorkflowProcessor:
             )
             marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
             await self.code_host.post_comment(
-                run.issue_number,
+                run.reply_number,
                 f"Implementation ready: {pull_request.url}\n\n{marker}",
             )
             return RunOutcome(
@@ -285,7 +330,7 @@ class WorkflowProcessor:
             kind=EventKind.COMMENT,
             event_name="issue_comment",
             action="created",
-            issue_number=run.issue_number,
+            issue_number=run.reply_number,
             actor=run.actor,
             body=run.prompt_context,
         )
@@ -318,7 +363,7 @@ class WorkflowProcessor:
                 )
             marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
             url = await self.code_host.post_comment(
-                run.issue_number,
+                run.reply_number,
                 f"{result.output}\n\n{marker}",
             )
             return RunOutcome(output=result.output, github_url=url)

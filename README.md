@@ -88,15 +88,29 @@ To replace GitHub or Pi, implement matching protocol and change composition root
 
 ## VPS deployment
 
-Example assumes systemd, Caddy, app at `/opt/agent-pipeline`, and state at `/var/lib/agent-pipeline`.
+Example assumes systemd, Caddy, Bubblewrap (`bwrap`), app at `/opt/agent-pipeline`, and state at `/var/lib/agent-pipeline`.
 
 ```bash
+command -v bwrap sudo git npm python3
+sudo groupadd --system agent-runs
 sudo useradd --system --home /var/lib/agent-pipeline --create-home agent-pipeline
-sudo install -d -o agent-pipeline -g agent-pipeline /opt/agent-pipeline /var/lib/agent-pipeline/worktrees
-sudo cp -a . /opt/agent-pipeline/
-sudo chown -R agent-pipeline:agent-pipeline /opt/agent-pipeline /var/lib/agent-pipeline
-sudo -u agent-pipeline /opt/agent-pipeline/setup.sh
-sudo install -m 600 -o agent-pipeline -g agent-pipeline .env.example /etc/agent-pipeline.env
+sudo useradd --system --home /var/lib/pi-runner --create-home pi-runner
+sudo useradd --system --home /var/lib/agent-pipeline-test --create-home agent-test
+sudo chmod 0700 /var/lib/pi-runner /var/lib/agent-pipeline-test
+sudo usermod -aG agent-runs agent-pipeline
+sudo usermod -aG agent-runs pi-runner
+sudo usermod -aG agent-runs agent-test
+sudo install -d -m 2750 -o agent-pipeline -g agent-runs /opt/agent-pipeline
+sudo install -d -m 0711 -o agent-pipeline -g agent-pipeline /var/lib/agent-pipeline
+sudo install -d -m 2770 -o agent-pipeline -g agent-runs /var/lib/agent-pipeline/worktrees
+git archive --format=tar HEAD | sudo tar -xf - -C /opt/agent-pipeline/
+sudo chown -R agent-pipeline:agent-runs /opt/agent-pipeline
+sudo -u agent-pipeline -H /opt/agent-pipeline/setup.sh
+sudo chmod -R g+rX /opt/agent-pipeline
+sudo install -m 640 -o root -g agent-pipeline .env.example /etc/agent-pipeline.env
+sudo install -m 755 deploy/agent-pipeline-run-tests /usr/local/libexec/agent-pipeline-run-tests
+sudo install -m 440 deploy/agent-pipeline.sudoers /etc/sudoers.d/agent-pipeline
+sudo visudo -cf /etc/sudoers.d/agent-pipeline
 sudo install -m 644 deploy/agent-pipeline.service /etc/systemd/system/
 sudo install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
 ```
@@ -108,17 +122,19 @@ APP_ENV=production
 DATABASE_PATH=/var/lib/agent-pipeline/agent-pipeline.db
 REPOSITORY_PATH=/var/lib/agent-pipeline/repository.git
 WORKTREE_ROOT=/var/lib/agent-pipeline/worktrees
-PI_RUNNER_USER=
+PI_EXECUTABLE=/opt/agent-pipeline/.tools/node_modules/.bin/pi
+PI_RUNNER_USER=pi-runner
+TEST_RUNNER_USER=agent-test
 ```
 
-Add required GitHub/dashboard secrets. Configure Caddy environment and authenticate Pi as service user:
+Add required GitHub/dashboard secrets. Configure Caddy environment and authenticate Pi as isolated runner user:
 
 ```bash
 sudo systemctl edit caddy
 # Add: [Service]
 # Add: Environment=DOMAIN=agents.example.com
 # Add: Environment=PORT=8000
-sudo -u agent-pipeline -H /opt/agent-pipeline/.tools/node_modules/.bin/pi
+sudo -u pi-runner -H /opt/agent-pipeline/.tools/node_modules/.bin/pi
 # run /login, then exit
 sudo systemctl daemon-reload
 sudo systemctl enable --now agent-pipeline caddy
@@ -134,6 +150,6 @@ systemctl status agent-pipeline
 
 ## Security boundary
 
-Webhook signature is verified from raw body before JSON processing. Delivery IDs are deduplicated in SQLite. Pi receives no GitHub token, webhook secret, or dashboard credential. App performs commits, pushes, comments, and PR creation after validating agent output.
+Webhook signature is verified from raw body before JSON processing. Delivery IDs are deduplicated in SQLite. Pi runs as `pi-runner`; repository tests run as `agent-test`. Bubblewrap exposes only current run worktree, hiding concurrent worktrees. Neither account can read `/etc/agent-pipeline.env`, SQLite state, or GitHub credentials. App performs commits, pushes, comments, and PR creation after validating agent output.
 
-Implementation runs still execute repository code through configured test command. Keep repository and write-authorized collaborators trusted. Use stronger container isolation before accepting untrusted public repositories.
+Agent and test processes still have host network and process resources. Keep repository and write-authorized collaborators trusted. Use container isolation before accepting untrusted public repositories.

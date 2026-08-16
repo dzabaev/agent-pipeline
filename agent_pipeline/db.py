@@ -14,6 +14,7 @@ class RunRecord:
     id: str
     delivery_id: str
     issue_number: int
+    reply_number: int
     kind: RunKind
     status: RunStatus
     attempt: int
@@ -85,6 +86,7 @@ class Database:
                     id TEXT PRIMARY KEY,
                     delivery_id TEXT NOT NULL REFERENCES deliveries(id),
                     issue_number INTEGER NOT NULL,
+                    reply_number INTEGER NOT NULL,
                     kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation')),
                     status TEXT NOT NULL CHECK (
                         status IN ('queued', 'running', 'publishing', 'succeeded', 'failed', 'interrupted')
@@ -106,6 +108,21 @@ class Database:
                     ON runs(status, created_at);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            if "reply_number" not in columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN reply_number INTEGER NOT NULL DEFAULT 0"
+                )
+                connection.execute(
+                    "UPDATE runs SET reply_number = issue_number WHERE reply_number = 0"
+                )
+
+    def healthcheck(self) -> None:
+        with self._connect() as connection:
+            connection.execute("SELECT 1").fetchone()
 
     def record_delivery(
         self,
@@ -138,6 +155,8 @@ class Database:
         kind: RunKind,
         actor: str,
         prompt_context: str,
+        reply_number: int | None = None,
+        reserve_implementation: bool = False,
     ) -> str | None:
         run_id = str(uuid.uuid4())
         now = _now()
@@ -154,17 +173,32 @@ class Database:
             if not inserted:
                 connection.commit()
                 return None
+            if reserve_implementation:
+                reserved = connection.execute(
+                    """
+                    UPDATE issues SET implementation_run_id = ?, updated_at = ?
+                    WHERE number = ?
+                    AND plan_pr_number IS NOT NULL
+                    AND implementation_run_id IS NULL
+                    AND implementation_pr_number IS NULL
+                    """,
+                    (run_id, now, issue_number),
+                ).rowcount
+                if not reserved:
+                    connection.commit()
+                    return ""
             connection.execute(
                 """
                 INSERT INTO runs(
-                    id, delivery_id, issue_number, kind, status, actor,
+                    id, delivery_id, issue_number, reply_number, kind, status, actor,
                     prompt_context, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     delivery_id,
                     issue_number,
+                    reply_number or issue_number,
                     kind,
                     RunStatus.QUEUED,
                     actor,
@@ -185,6 +219,7 @@ class Database:
         actor: str,
         prompt_context: str,
         actor_permission: str | None = None,
+        reply_number: int | None = None,
     ) -> str:
         run_id = str(uuid.uuid4())
         now = _now()
@@ -192,14 +227,15 @@ class Database:
             connection.execute(
                 """
                 INSERT INTO runs(
-                    id, delivery_id, issue_number, kind, status, actor,
+                    id, delivery_id, issue_number, reply_number, kind, status, actor,
                     actor_permission, prompt_context, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     delivery_id,
                     issue_number,
+                    reply_number or issue_number,
                     kind,
                     RunStatus.QUEUED,
                     actor,
@@ -334,6 +370,20 @@ class Database:
         except KeyError:
             return None
 
+    def issue_for_pull_request(self, pull_request_number: int) -> int | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT number FROM issues
+                WHERE plan_pr_number = ? OR implementation_pr_number = ?
+                """,
+                (pull_request_number, pull_request_number),
+            ).fetchone()
+        if row is None:
+            return None
+        number = row["number"]
+        return number if isinstance(number, int) else None
+
     def reserve_implementation(self, issue_number: int, run_id: str) -> bool:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -377,6 +427,7 @@ class Database:
         branch: str | None = None,
     ) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 """
                 UPDATE runs
@@ -395,11 +446,22 @@ class Database:
                     RunStatus.PUBLISHING,
                 ),
             ).rowcount
+            if updated:
+                connection.execute(
+                    """
+                    UPDATE issues SET implementation_run_id = NULL, updated_at = ?
+                    WHERE implementation_run_id = ?
+                    AND implementation_pr_number IS NULL
+                    """,
+                    (_now(), run_id),
+                )
+            connection.commit()
         if not updated:
             raise KeyError(run_id)
 
     def fail_run(self, run_id: str, error: str) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 """
                 UPDATE runs
@@ -415,6 +477,16 @@ class Database:
                     RunStatus.PUBLISHING,
                 ),
             ).rowcount
+            if updated:
+                connection.execute(
+                    """
+                    UPDATE issues SET implementation_run_id = NULL, updated_at = ?
+                    WHERE implementation_run_id = ?
+                    AND implementation_pr_number IS NULL
+                    """,
+                    (_now(), run_id),
+                )
+            connection.commit()
         if not updated:
             raise KeyError(run_id)
 
@@ -436,6 +508,8 @@ class Database:
 
     def mark_interrupted(self) -> int:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = _now()
             updated = connection.execute(
                 """
                 UPDATE runs SET status = ?, updated_at = ?
@@ -443,11 +517,22 @@ class Database:
                 """,
                 (
                     RunStatus.INTERRUPTED,
-                    _now(),
+                    now,
                     RunStatus.RUNNING,
                     RunStatus.PUBLISHING,
                 ),
             ).rowcount
+            connection.execute(
+                """
+                UPDATE issues SET implementation_run_id = NULL, updated_at = ?
+                WHERE implementation_pr_number IS NULL
+                AND implementation_run_id IN (
+                    SELECT id FROM runs WHERE status = ?
+                )
+                """,
+                (now, RunStatus.INTERRUPTED),
+            )
+            connection.commit()
         return updated
 
     def _connect(self) -> sqlite3.Connection:
@@ -468,6 +553,7 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         id=row["id"],
         delivery_id=row["delivery_id"],
         issue_number=row["issue_number"],
+        reply_number=row["reply_number"],
         kind=RunKind(row["kind"]),
         status=RunStatus(row["status"]),
         attempt=row["attempt"],

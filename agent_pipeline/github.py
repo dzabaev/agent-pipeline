@@ -17,14 +17,15 @@ from .contracts import (
     ConversationContext,
     EventKind,
     PullRequest,
+    WebhookError,
 )
+from .process import terminate_process_group
 
 
 PUBLICATION_MARKER = "<!-- agent-pipeline:"
 
 
-class WebhookRejected(ValueError):
-    """Raised when a GitHub webhook cannot be trusted or decoded."""
+WebhookRejected = WebhookError
 
 
 class GitHubError(RuntimeError):
@@ -103,6 +104,12 @@ class GitHubCodeHost:
         return permission in {"write", "maintain", "admin"}
 
     async def post_comment(self, issue_number: int, body: str) -> str:
+        marker = _publication_marker(body)
+        if marker:
+            comments = await self._get_list(f"issues/{issue_number}/comments")
+            for comment in comments:
+                if marker in _text(comment.get("body")):
+                    return _text(comment.get("html_url"))
         response = await self._request(
             "POST", f"issues/{issue_number}/comments", json={"body": body}
         )
@@ -132,22 +139,48 @@ class GitHubCodeHost:
             raise GitHubError(f"GitHub returned invalid content for {path}") from error
 
     async def push_branch(self, repository: Path, branch: str) -> None:
+        remote_ref = f"refs/heads/{branch}"
+        remote = await self._run_git(
+            repository,
+            "ls-remote",
+            "--refs",
+            "origin",
+            remote_ref,
+        )
+        expected_sha = remote.decode().partition("\t")[0].strip()
+        await self._run_git(
+            repository,
+            "push",
+            "--no-verify",
+            f"--force-with-lease={remote_ref}:{expected_sha}",
+            "origin",
+            f"HEAD:{remote_ref}",
+        )
+
+    async def _run_git(self, repository: Path, *arguments: str) -> bytes:
         process = await asyncio.create_subprocess_exec(
             "git",
             "-C",
             str(repository),
-            "push",
-            "origin",
-            f"HEAD:refs/heads/{branch}",
-            "--force-with-lease",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "remote.origin.mirror=false",
+            *arguments,
             env=self._git_environment(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _, stderr = await process.communicate()
+        try:
+            stdout, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            await terminate_process_group(process)
+            raise
         if process.returncode:
             detail = stderr.decode(errors="replace").strip()
-            raise GitHubError(f"git push failed: {detail}")
+            raise GitHubError(f"git {arguments[0]} failed: {detail}")
+        return stdout
 
     async def open_pull_request(
         self,
@@ -158,6 +191,18 @@ class GitHubCodeHost:
         body: str,
         draft: bool,
     ) -> PullRequest:
+        owner = self.repository.split("/", 1)[0]
+        response = await self._request(
+            "GET",
+            "pulls",
+            params={"state": "all", "head": f"{owner}:{branch}", "per_page": 100},
+        )
+        existing = response.json()
+        if not isinstance(existing, list):
+            raise GitHubError("GitHub returned an invalid pull request list")
+        if existing:
+            return _pull_request(_mapping(existing[0]))
+
         response = await self._request(
             "POST",
             "pulls",
@@ -438,6 +483,17 @@ def _number(value: Mapping[str, Any]) -> int:
     if not isinstance(number, int) or number < 1:
         raise WebhookRejected("GitHub webhook item number is invalid")
     return number
+
+
+def _publication_marker(body: str) -> str:
+    return next(
+        (
+            line.strip()
+            for line in body.splitlines()
+            if line.strip().startswith(PUBLICATION_MARKER)
+        ),
+        "",
+    )
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:

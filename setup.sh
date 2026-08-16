@@ -4,12 +4,18 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$ROOT"
 
-for command in python3 git npm; do
+for command in python3 git; do
   command -v "$command" >/dev/null || {
     echo "Missing required command: $command" >&2
     exit 1
   }
 done
+if [ "${SETUP_SKIP_PI:-0}" != 1 ]; then
+  command -v npm >/dev/null || {
+    echo "Missing required command: npm" >&2
+    exit 1
+  }
+fi
 
 python3 - <<'PY'
 import sys
@@ -20,7 +26,7 @@ PY
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/python -m pip install --quiet --editable '.[dev]'
 
-if [ ! -x .tools/node_modules/.bin/pi ]; then
+if [ "${SETUP_SKIP_PI:-0}" != 1 ] && [ ! -x .tools/node_modules/.bin/pi ]; then
   npm install --silent --prefix .tools --ignore-scripts @earendil-works/pi-coding-agent@0.84.2
 fi
 

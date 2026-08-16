@@ -113,6 +113,47 @@ class GitHubApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.base_sha, "base-sha")
         self.assertTrue(can_write)
 
+    async def test_closed_branch_pull_request_prevents_duplicate_publication(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 44,
+                        "html_url": "https://github.test/pull/44",
+                        "head": {"ref": "agent/issue-12", "sha": "head"},
+                        "base": {"ref": "main"},
+                        "merged": False,
+                    }
+                ],
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(respond)
+        ) as client:
+            host = GitHubCodeHost(
+                repository="owner/repository",
+                token="token",
+                webhook_secret="secret",
+                bot_login="pipeline-bot",
+                api_url="https://api.github.test",
+                client=client,
+            )
+            pull_request = await host.open_pull_request(
+                issue_number=12,
+                branch="agent/issue-12",
+                title="Implementation",
+                body="Body",
+                draft=True,
+            )
+
+        self.assertEqual(pull_request.number, 44)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].url.params["state"], "all")
+
 
 if __name__ == "__main__":
     unittest.main()
