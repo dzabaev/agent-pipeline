@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORKTREE_ROOT=${1:-}
+WORKTREE=${2:-}
+shift 2 || true
+
+case "$WORKTREE" in
+  "$WORKTREE_ROOT"/*) ;;
+  *) echo "Refusing test path outside worktree root" >&2; exit 64 ;;
+esac
+
+umask 0007
+exec /usr/bin/bwrap \
+  --die-with-parent \
+  --new-session \
+  --unshare-pid \
+  --unshare-ipc \
+  --unshare-uts \
+  --ro-bind / / \
+  --tmpfs /mnt \
+  --dir /mnt/agent-pipeline \
+  --dir /mnt/agent-pipeline/worktree \
+  --bind "$WORKTREE" /mnt/agent-pipeline/worktree \
+  --tmpfs "$WORKTREE_ROOT" \
+  --dir "$WORKTREE" \
+  --bind /mnt/agent-pipeline/worktree "$WORKTREE" \
+  --tmpfs /tmp \
+  --tmpfs /var/tmp \
+  --proc /proc \
+  --dev /dev \
+  --chdir "$WORKTREE" \
+  -- \
+  /usr/bin/env -i \
+    GIT_OPTIONAL_LOCKS=0 \
+    HOME=/var/lib/agent-pipeline-test \
+    LANG=C.UTF-8 \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    "$@"

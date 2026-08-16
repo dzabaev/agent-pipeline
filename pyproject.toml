@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-pipeline"
+version = "0.1.0"
+description = "Run Pi agents from GitHub events"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "jinja2>=3.1,<4",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[tool.setuptools]
+packages = ["agent_pipeline"]
+
+[tool.setuptools.package-data]
+agent_pipeline = ["templates/*.html", "static/*.css"]
+
+[tool.pyright]
+include = ["agent_pipeline", "tests"]
+extraPaths = ["."]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"

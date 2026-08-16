@@ -1,0 +1,5 @@
+Cmnd_Alias AGENT_PIPELINE_PI = /usr/bin/bwrap *
+Cmnd_Alias AGENT_PIPELINE_TESTS = /usr/local/libexec/agent-pipeline-run-tests *
+
+agent-pipeline ALL=(pi-runner) NOPASSWD: AGENT_PIPELINE_PI
+agent-pipeline ALL=(agent-test) NOPASSWD: AGENT_PIPELINE_TESTS

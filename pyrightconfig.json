@@ -1,0 +1,7 @@
+{
+  "include": ["agent_pipeline", "tests"],
+  "extraPaths": ["."],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11"
+}

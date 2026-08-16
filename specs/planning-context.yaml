@@ -1,0 +1,45 @@
+feature_name: GitHub-driven Pi agent pipeline
+problem_statement: >-
+  A single-repository FastAPI service must receive GitHub activity, run Pi with
+  repository context, answer comments, produce reviewable plan documents, and
+  create implementation pull requests only after an authorized approval.
+constraints:
+  - Run on one private VPS for one configured GitHub repository.
+  - Use a repository webhook and a fine-grained PAT owned by a dedicated machine account.
+  - Persist webhook deliveries and runs in SQLite.
+  - Run up to MAX_CONCURRENT_AGENTS Pi jobs in parallel, each in an isolated git worktree.
+  - Verify every webhook from the raw body with X-Hub-Signature-256.
+  - Deduplicate deliveries with X-GitHub-Delivery.
+  - Accept implementation approval only from GitHub users with write, maintain, or admin permission.
+  - Keep GitHub credentials unavailable to the Pi subprocess.
+  - Provide executable setup.sh, run.sh, and tests.sh scripts for bootstrap, app startup, and all tests.
+  - Keep code-host interaction and agent-runtime interaction behind separate replaceable module contracts.
+out_of_scope:
+  - Multiple repositories or tenants
+  - GitHub OAuth or general public signup
+  - Redis, Celery, or multiple web/worker processes
+  - JavaScript frontend framework or live token streaming
+  - Automatic merging
+  - Billing, quotas, or model selection UI
+  - Inline editing of prompts and rules from the dashboard
+  - Additional code-host adapters such as GitLab or Forgejo
+  - Additional agent-runtime adapters
+key_decisions:
+  - decision: New issues create a plan-only pull request at plans/issues/<number>.md.
+    rationale: Humans can review intent before source code changes.
+  - decision: Every human issue or pull-request comment runs Pi in review mode and receives one reply.
+    rationale: GitHub remains the main conversation interface.
+  - decision: Merging the plan PR or posting an explicit approval phrase may start implementation.
+    rationale: Plan merge is the normal approval gate; direct commands provide an intentional shortcut.
+  - decision: Approval phrases use deterministic whole-comment matching rather than model classification.
+    rationale: Natural-language inference is unsafe as an authorization boundary.
+  - decision: At most one implementation workflow and one implementation PR exist per issue.
+    rationale: Prevent duplicate work when merge and comment events race.
+  - decision: One FastAPI process starts MAX_CONCURRENT_AGENTS durable SQLite queue workers.
+    rationale: Configurable in-process parallelism supports one VPS without Redis or Celery.
+  - decision: Every agent run receives its own exclusive git worktree keyed by run ID.
+    rationale: Parallel agents must not share branches, working directories, or uncommitted changes.
+  - decision: Root scripts are the supported development interface.
+    rationale: setup.sh bootstraps idempotently, run.sh starts the app, and tests.sh runs unit then integration tests.
+  - decision: Core workflow depends on separate CodeHost and AgentRunner protocols.
+    rationale: GitHub and Pi implementations can be replaced independently without changing workflow logic.
