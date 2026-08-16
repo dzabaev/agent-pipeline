@@ -20,4 +20,4 @@ elif [ -z "${GITHUB_REPOSITORY:-}" ]; then
   exit 1
 fi
 
-exec .venv/bin/uvicorn --factory agent_pipeline.main:create_app --host 127.0.0.1 --port "${PORT:-8000}" --workers 1
+exec .venv/bin/uvicorn --factory agent_pipeline.main:create_app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" --workers 1

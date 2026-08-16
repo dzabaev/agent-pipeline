@@ -32,10 +32,10 @@ $EDITOR .env
 Scripts:
 
 - `setup.sh` creates `.venv`, installs app dependencies, installs project-local Pi when needed, creates `.env`, and prepares runtime directories.
-- `run.sh` loads `.env` and starts one Uvicorn process on `127.0.0.1:${PORT:-8000}`.
+- `run.sh` loads `.env` and starts one Uvicorn process on `${HOST:-127.0.0.1}:${PORT:-8000}`. Set `HOST=0.0.0.0` only for direct IP access; prefer Caddy/TLS in production.
 - `tests.sh` runs unit tests, then integration tests. Tests use fake GitHub/Pi boundaries and need no credentials or network.
 
-Open <http://127.0.0.1:8000/> and authenticate with `DASHBOARD_USER` / `DASHBOARD_PASSWORD`.
+Open <http://127.0.0.1:8000/> and authenticate with `DASHBOARD_USER` / `DASHBOARD_PASSWORD`. For temporary VPS-IP access, set `HOST=0.0.0.0` and open `http://<vps-ip>:<PORT>/`; Basic Auth is not encrypted without HTTPS.
 
 ## GitHub setup
 
