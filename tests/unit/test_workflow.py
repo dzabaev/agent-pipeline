@@ -595,6 +595,28 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
                 runner,
                 '{"action":"ask","message":"Which change do you want?",'
                 '"evidence":""}',
+                events=(
+                    {
+                        "type": "agent_end",
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Which change do you want?",
+                                    }
+                                ],
+                                "usage": {
+                                    "input": 10,
+                                    "output": 5,
+                                    "cacheRead": 2,
+                                    "cacheWrite": 1,
+                                },
+                            }
+                        ],
+                    },
+                ),
             )
             processor = WorkflowProcessor(
                 database=database,
@@ -606,21 +628,28 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
             )
 
             await processor(run)
-            recorded_action = database.get_run(run.id).decision_action
+            recorded_run = database.get_run(run.id)
 
         self.assertEqual(len(runner.requests), 1)
         self.assertEqual(runner.requests[0].kind, RunKind.DECISION)
-        self.assertEqual(recorded_action, "comment")
+        self.assertEqual(recorded_run.decision_action, "comment")
+        self.assertEqual(recorded_run.tokens_consumed, 18)
+        self.assertIn("Which change do you want?", recorded_run.agent_history_json)
         self.assertIn(
             "> Maybe change this somehow\n\n@alice Which change do you want?",
             host.comments[0][1],
         )
 
 
-def _result_runner(runner: FakeAgentRunner, output: str):
+def _result_runner(
+    runner: FakeAgentRunner,
+    output: str,
+    *,
+    events=(),
+):
     async def run(request: AgentRequest) -> AgentResult:
         runner.requests.append(request)
-        return AgentResult(output, (), "test-model")
+        return AgentResult(output, tuple(events), "test-model")
 
     return run
 

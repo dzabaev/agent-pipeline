@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -68,6 +69,16 @@ def _csrf_token(credential: str, run_id: str) -> str:
     return hmac.new(
         credential.encode(), run_id.encode(), hashlib.sha256
     ).hexdigest()
+
+
+def _agent_history(value: str) -> list[dict[str, object]]:
+    try:
+        history = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(history, list):
+        return []
+    return [item for item in history if isinstance(item, dict)]
 
 
 @asynccontextmanager
@@ -192,6 +203,7 @@ def create_app(
             name="run.html",
             context={
                 "run": run,
+                "history": _agent_history(run.agent_history_json),
                 "csrf": _csrf_token(
                     dashboard_settings.dashboard_password, run_id
                 ),

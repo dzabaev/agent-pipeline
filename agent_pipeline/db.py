@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ class RunRecord:
     reply_number: int
     kind: RunKind
     decision_action: str | None
+    tokens_consumed: int
+    agent_history_json: str
     status: RunStatus
     attempt: int
     actor: str
@@ -90,6 +93,8 @@ class Database:
                     reply_number INTEGER NOT NULL,
                     kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation', 'decision')),
                     decision_action TEXT,
+                    tokens_consumed INTEGER NOT NULL DEFAULT 0,
+                    agent_history_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL CHECK (
                         status IN ('queued', 'running', 'publishing', 'succeeded', 'failed', 'interrupted')
                     ),
@@ -134,6 +139,8 @@ class Database:
                         reply_number INTEGER NOT NULL,
                         kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation', 'decision')),
                         decision_action TEXT,
+                        tokens_consumed INTEGER NOT NULL DEFAULT 0,
+                        agent_history_json TEXT NOT NULL DEFAULT '[]',
                         status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'publishing', 'succeeded', 'failed', 'interrupted')),
                         attempt INTEGER NOT NULL DEFAULT 0,
                         actor TEXT NOT NULL,
@@ -149,15 +156,15 @@ class Database:
                     );
                     INSERT INTO runs_v2(
                         id, delivery_id, issue_number, reply_number, kind,
-                        decision_action, status, attempt, actor, actor_permission,
-                        prompt_context, output, error, branch, worktree_path,
-                        github_url, created_at, updated_at
+                        decision_action, tokens_consumed, agent_history_json, status,
+                        attempt, actor, actor_permission, prompt_context, output,
+                        error, branch, worktree_path, github_url, created_at, updated_at
                     )
                     SELECT
                         id, delivery_id, issue_number, reply_number, kind, NULL,
-                        status, attempt, actor, actor_permission, prompt_context,
-                        output, error, branch, worktree_path, github_url, created_at,
-                        updated_at
+                        0, '[]', status, attempt, actor, actor_permission,
+                        prompt_context, output, error, branch, worktree_path,
+                        github_url, created_at, updated_at
                     FROM runs;
                     DROP TABLE runs;
                     ALTER TABLE runs_v2 RENAME TO runs;
@@ -170,6 +177,14 @@ class Database:
             }
             if "decision_action" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN decision_action TEXT")
+            if "tokens_consumed" not in columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN tokens_consumed INTEGER NOT NULL DEFAULT 0"
+                )
+            if "agent_history_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN agent_history_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def healthcheck(self) -> None:
         with self._connect() as connection:
@@ -348,6 +363,47 @@ class Database:
                     RunStatus.PUBLISHING,
                 ),
             ).rowcount
+        if not updated:
+            raise KeyError(run_id)
+
+    def append_agent_history(
+        self,
+        run_id: str,
+        kind: RunKind,
+        messages: tuple[dict[str, str], ...],
+        tokens: int,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT agent_history_json FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            try:
+                history = json.loads(row["agent_history_json"])
+            except json.JSONDecodeError:
+                history = []
+            if not isinstance(history, list):
+                history = []
+            history.append({"kind": str(kind), "messages": messages})
+            updated = connection.execute(
+                """
+                UPDATE runs
+                SET agent_history_json = ?,
+                    tokens_consumed = tokens_consumed + ?, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    json.dumps(history),
+                    max(tokens, 0),
+                    _now(),
+                    run_id,
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).rowcount
+            connection.commit()
         if not updated:
             raise KeyError(run_id)
 
@@ -724,6 +780,8 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         reply_number=row["reply_number"],
         kind=RunKind(row["kind"]),
         decision_action=row["decision_action"],
+        tokens_consumed=row["tokens_consumed"],
+        agent_history_json=row["agent_history_json"],
         status=RunStatus(row["status"]),
         attempt=row["attempt"],
         actor=row["actor"],

@@ -26,8 +26,9 @@
                                 <th>Action</th>
                                 <th>Issue</th>
                                 <th>Actor</th>
+                                <th>Tokens</th>
                                 <th>Result</th>
-                                <th>Action</th>
+                                <th>Controls</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -41,6 +42,7 @@
                                 <td>{{ run.decision_action or run.kind }}</td>
                                 <td>#{{ run.issue_number }}</td>
                                 <td>{{ run.actor }}</td>
+                                <td>{{ run.tokens_consumed }}</td>
                                 <td>
                                     <a
                                         href="{{ url_for('run_detail', run_id=run.id) }}"
@@ -53,7 +55,12 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    {% if run.status in ('failed',
+                                    {% if run.agent_history_json != '[]' %}
+                                    <a
+                                        href="{{ url_for('run_detail', run_id=run.id) }}#dialog-history"
+                                        >Dialog</a
+                                    >
+                                    {% endif %} {% if run.status in ('failed',
                                     'interrupted') %}
                                     <form
                                         method="post"
@@ -71,7 +78,7 @@
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="6">No runs yet.</td>
+                                <td colspan="7">No runs yet.</td>
                             </tr>
                             {% endfor %}
                         </tbody>

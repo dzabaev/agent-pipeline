@@ -8,6 +8,7 @@ from typing import Any, Mapping, Protocol
 
 from .contracts import (
     AgentRequest,
+    AgentResult,
     AgentRunner,
     CodeHost,
     CodeHostEvent,
@@ -99,6 +100,17 @@ class WorkflowProcessor:
         )
         return await self.code_host.post_comment(run.reply_number, message)
 
+    async def _run_agent(self, request: AgentRequest) -> AgentResult:
+        result = await self.agent_runner.run(request)
+        messages, tokens = _dialog_history(request.prompt, result.events)
+        self.database.append_agent_history(
+            request.run_id,
+            request.kind,
+            messages,
+            tokens,
+        )
+        return result
+
     async def __call__(self, run: RunRecord) -> RunOutcome:
         if run.kind == RunKind.DECISION:
             return await self._decision(run)
@@ -138,7 +150,7 @@ class WorkflowProcessor:
             ref=context.base_sha or context.default_branch,
         )
         try:
-            result = await self.agent_runner.run(
+            result = await self._run_agent(
                 AgentRequest(
                     run_id=run.id,
                     kind=RunKind.DECISION,
@@ -368,7 +380,7 @@ class WorkflowProcessor:
         )
         try:
             original_head = await self.worktrees.head(worktree)
-            result = await self.agent_runner.run(
+            result = await self._run_agent(
                 AgentRequest(
                     run_id=run.id,
                     kind=RunKind.PLAN,
@@ -532,7 +544,7 @@ class WorkflowProcessor:
         )
         try:
             original_head = await self.worktrees.head(worktree)
-            result = await self.agent_runner.run(
+            result = await self._run_agent(
                 AgentRequest(
                     run_id=run.id,
                     kind=RunKind.IMPLEMENTATION,
@@ -621,7 +633,7 @@ class WorkflowProcessor:
             ref=context.base_sha or context.default_branch,
         )
         try:
-            result = await self.agent_runner.run(
+            result = await self._run_agent(
                 AgentRequest(
                     run_id=run.id,
                     kind=RunKind.REVIEW,
@@ -651,6 +663,93 @@ class WorkflowProcessor:
             return RunOutcome(output=result.output, github_url=url)
         finally:
             await self.worktrees.remove(worktree)
+
+
+def _dialog_history(
+    prompt: str,
+    events: tuple[Mapping[str, Any], ...],
+) -> tuple[tuple[dict[str, str], ...], int]:
+    raw_messages: list[Mapping[str, Any]] = []
+    for event in reversed(events):
+        if event.get("type") != "agent_end":
+            continue
+        messages = event.get("messages")
+        if isinstance(messages, list):
+            raw_messages = [
+                message for message in messages if isinstance(message, Mapping)
+            ]
+            break
+    if not raw_messages:
+        raw_messages = [
+            message
+            for event in events
+            if event.get("type") == "message_end"
+            and isinstance((message := event.get("message")), Mapping)
+        ]
+
+    dialog: list[dict[str, str]] = [{"role": "user", "text": prompt}]
+    tokens = 0
+    for message in raw_messages:
+        tokens += _message_tokens(message)
+        role = str(message.get("role", "agent"))
+        if role == "user":
+            continue
+        text = _message_text(message)
+        if text:
+            dialog.append({"role": role, "text": text})
+    return tuple(dialog), tokens
+
+
+def _message_tokens(message: Mapping[str, Any]) -> int:
+    usage = message.get("usage")
+    if not isinstance(usage, Mapping):
+        return 0
+    total = usage.get("totalTokens")
+    if total is not None:
+        return _token_number(total)
+    return sum(
+        _token_number(usage.get(key))
+        for key in ("input", "output", "cacheRead", "cacheWrite")
+    )
+
+
+def _token_number(value: object) -> int:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value), 0)
+    except (OverflowError, ValueError):
+        return 0
+
+
+def _message_text(message: Mapping[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, Mapping):
+            continue
+        item_type = str(item.get("type", ""))
+        if item_type == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        elif item_type == "thinking":
+            thinking = item.get("thinking")
+            if isinstance(thinking, str):
+                parts.append(f"[thinking]\n{thinking}")
+        elif item_type == "toolCall":
+            name = str(item.get("name", "tool"))
+            arguments = json.dumps(
+                item.get("arguments", {}),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            parts.append(f"[tool] {name} {arguments}")
+    return "\n\n".join(parts)
 
 
 def _parse_decision(output: str) -> dict[str, str]:

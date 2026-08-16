@@ -43,6 +43,12 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
             if claimed is None:
                 self.fail("run was not queued")
             database.record_decision_action(run_id, "comment")
+            database.append_agent_history(
+                run_id,
+                RunKind.DECISION,
+                ({"role": "user", "text": "plan"},),
+                123,
+            )
             database.fail_run(run_id, "failed deliberately")
             host = GitHubCodeHost(
                 repository=settings.github_repository,
@@ -77,6 +83,9 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     )
                     if token_match is None:
                         self.fail("dashboard did not render retry token")
+                    dialog = await client.get(
+                        f"/runs/{run_id}", auth=("admin", "password")
+                    )
                     retried = await client.post(
                         f"/runs/{run_id}/retry",
                         auth=("admin", "password"),
@@ -89,6 +98,10 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("failed deliberately", dashboard.text)
         self.assertIn(">comment<", dashboard.text)
+        self.assertIn(">123<", dashboard.text)
+        self.assertIn("#dialog-history", dashboard.text)
+        self.assertIn("Agent dialog", dialog.text)
+        self.assertIn("plan", dialog.text)
         self.assertIn(
             'href="https://app.test/agent_runner/static/app.css"',
             dashboard.text,

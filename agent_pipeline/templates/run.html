@@ -24,6 +24,8 @@
         <dd>{{ run.actor }}</dd>
         <dt>Attempt</dt>
         <dd>{{ run.attempt }}</dd>
+        <dt>Tokens consumed</dt>
+        <dd>{{ run.tokens_consumed }}</dd>
         <dt>Created</dt>
         <dd>{{ run.created_at }}</dd>
         {% if run.github_url %}
@@ -42,6 +44,16 @@
       {% endif %} {% if run.output %}
       <h2>Output</h2>
       <pre>{{ run.output }}</pre>
+      {% endif %} {% if history %}
+      <section id="dialog-history">
+        <h2>Agent dialog</h2>
+        {% for call in history %}
+        <h3>{{ call.kind }}</h3>
+        {% for message in call.messages %}
+        <h4>{{ message.role }}</h4>
+        <pre>{{ message.text }}</pre>
+        {% endfor %} {% endfor %}
+      </section>
       {% endif %}
     </main>
   </body>
