@@ -27,7 +27,9 @@ from .settings import Settings
 from .worker import WorkerPool  # pyright: ignore[reportMissingImports]
 from .workflow import (  # pyright: ignore[reportMissingImports]
     WorkflowProcessor,
+    as_comment_reply,
     is_implementation_command,
+    with_model_footer,
 )
 from .worktrees import WorktreeManager  # pyright: ignore[reportMissingImports]
 
@@ -130,6 +132,8 @@ def create_app(
         active_runner = agent_runner or PiAgentRunner(
             configured.pi_executable,
             configured.pi_runner_user,
+            model=configured.model,
+            reasoning_level=configured.reasoning_level,
         )
         active_worktrees = worktrees or WorktreeManager(
             repository_path=configured.repository_path,
@@ -145,6 +149,7 @@ def create_app(
             worktrees=active_worktrees,
             agent_timeout_seconds=configured.agent_timeout_seconds,
             test_command=configured.test_command,
+            model_name=configured.model,
         )
         pool = WorkerPool(
             active_database,
@@ -280,10 +285,13 @@ def create_app(
                     f"{pull_request.url}"
                 )
             marker = f"<!-- agent-pipeline:{event.delivery_id} -->"
-            await active_code_host.post_comment(
-                reply_number,
+            if event.body:
+                message = as_comment_reply(event.actor, event.body, message)
+            message = with_model_footer(
                 f"{message}\n\n{marker}",
+                configured.model if configured is not None else "Pi",
             )
+            await active_code_host.post_comment(reply_number, message)
             return {
                 "status": "duplicate" if run_id is None else "already_queued"
             }

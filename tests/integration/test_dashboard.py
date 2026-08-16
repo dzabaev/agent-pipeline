@@ -19,6 +19,8 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
             settings = Settings.from_mapping(
                 {
                     "GITHUB_REPOSITORY": "owner/repository",
+                    "MODEL": "test-model",
+                    "REASONING_LEVEL": "medium",
                     "GITHUB_TOKEN": "token",
                     "GITHUB_WEBHOOK_SECRET": "secret",
                     "GITHUB_BOT_LOGIN": "pipeline-bot",
@@ -70,7 +72,7 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         "/", auth=("admin", "password")
                     )
                     token_match = re.search(
-                        r'name="csrf" value="([a-f0-9]+)"', dashboard.text
+                        r'name="csrf"\s+value="([a-f0-9]+)"', dashboard.text
                     )
                     if token_match is None:
                         self.fail("dashboard did not render retry token")

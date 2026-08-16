@@ -65,8 +65,16 @@ Copy `.env.example` to `.env`. Required values:
 - `GITHUB_TOKEN`
 - `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_BOT_LOGIN`
+- `MODEL`
+- `REASONING_LEVEL`
 - `DASHBOARD_USER`
 - `DASHBOARD_PASSWORD`
+
+Set `MODEL` to the Pi model pattern or ID used for every run (for example,
+`anthropic/claude-sonnet-4-5`). The same value appears in GitHub attribution
+footers when Pi does not report a more specific resolved model. Set
+`REASONING_LEVEL` to `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+`max`; it is passed to Pi as `--thinking`.
 
 Important optional values:
 
@@ -123,6 +131,8 @@ DATABASE_PATH=/var/lib/agent-pipeline/agent-pipeline.db
 REPOSITORY_PATH=/var/lib/agent-pipeline/repository.git
 WORKTREE_ROOT=/var/lib/agent-pipeline/worktrees
 PI_EXECUTABLE=/opt/agent-pipeline/.tools/node_modules/.bin/pi
+MODEL=anthropic/claude-sonnet-4-5
+REASONING_LEVEL=medium
 PI_RUNNER_USER=pi-runner
 TEST_RUNNER_USER=agent-test
 ```

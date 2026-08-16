@@ -21,6 +21,8 @@ class Settings:
     max_concurrent_agents: int
     agent_timeout_seconds: int
     pi_executable: str
+    model: str
+    reasoning_level: str
     pi_runner_user: str | None
     test_runner_user: str | None
     test_command: str
@@ -86,6 +88,17 @@ class Settings:
             errors.append("PORT must be at most 65535")
 
         app_env = values.get("APP_ENV", "development").strip() or "development"
+        reasoning_level = required("REASONING_LEVEL")
+        if reasoning_level and reasoning_level not in {
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        }:
+            errors.append("REASONING_LEVEL is not supported")
         pi_runner_user = values.get("PI_RUNNER_USER", "").strip() or None
         test_runner_user = values.get("TEST_RUNNER_USER", "").strip() or None
         if app_env == "production":
@@ -109,6 +122,8 @@ class Settings:
             max_concurrent_agents=positive_int("MAX_CONCURRENT_AGENTS", "1"),
             agent_timeout_seconds=positive_int("AGENT_TIMEOUT_SECONDS", "1800"),
             pi_executable=values.get("PI_EXECUTABLE", "pi").strip() or "pi",
+            model=required("MODEL"),
+            reasoning_level=reasoning_level,
             pi_runner_user=pi_runner_user,
             test_runner_user=test_runner_user,
             test_command=values.get("TEST_COMMAND", "./tests.sh").strip()

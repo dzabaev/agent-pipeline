@@ -14,6 +14,8 @@ VALID = {
     "MAX_CONCURRENT_AGENTS": "3",
     "AGENT_TIMEOUT_SECONDS": "60",
     "PI_EXECUTABLE": "pi",
+    "MODEL": "anthropic/claude-sonnet-4-5",
+    "REASONING_LEVEL": "medium",
     "PI_RUNNER_USER": "",
     "TEST_RUNNER_USER": "",
     "TEST_COMMAND": "./tests.sh",
@@ -34,6 +36,8 @@ class SettingsTests(unittest.TestCase):
             loaded = settings.Settings.from_mapping(VALID, root=root)
 
         self.assertEqual(loaded.max_concurrent_agents, 3)
+        self.assertEqual(loaded.model, "anthropic/claude-sonnet-4-5")
+        self.assertEqual(loaded.reasoning_level, "medium")
         self.assertEqual(loaded.github_owner, "owner")
         self.assertEqual(loaded.github_name, "repository")
         self.assertEqual(loaded.database_path, root / "var/app.db")
@@ -44,6 +48,8 @@ class SettingsTests(unittest.TestCase):
             "GITHUB_TOKEN": "",
             "DASHBOARD_PASSWORD": "",
             "MAX_CONCURRENT_AGENTS": "0",
+            "MODEL": "",
+            "REASONING_LEVEL": "extreme",
         }
 
         with self.assertRaises(settings.ConfigError) as raised:
@@ -53,6 +59,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("GITHUB_TOKEN", message)
         self.assertIn("DASHBOARD_PASSWORD", message)
         self.assertIn("MAX_CONCURRENT_AGENTS", message)
+        self.assertIn("MODEL", message)
+        self.assertIn("REASONING_LEVEL", message)
 
     def test_production_requires_separate_agent_and_test_users(self) -> None:
         with self.assertRaises(settings.ConfigError) as raised:

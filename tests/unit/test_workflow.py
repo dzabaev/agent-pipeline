@@ -22,6 +22,7 @@ from agent_pipeline.workflow import (  # pyright: ignore[reportMissingImports]
 class FakeCodeHost:
     def __init__(self) -> None:
         self.comments: list[tuple[int, str]] = []
+        self.pull_request_bodies: list[str] = []
         self.write_permission = True
 
     async def fetch_context(self, _event: object) -> ConversationContext:
@@ -67,6 +68,7 @@ class FakeCodeHost:
         body: str,
         draft: bool,
     ) -> PullRequest:
+        self.pull_request_bodies.append(body)
         number = 43 if draft else 42
         return PullRequest(
             number=number,
@@ -82,7 +84,7 @@ class FakeAgentRunner:
 
     async def run(self, request: AgentRequest) -> AgentResult:
         self.requests.append(request)
-        return AgentResult(output="Suggested answer")
+        return AgentResult("Suggested answer", (), "test-model")
 
 
 class FakeWorktrees:
@@ -177,8 +179,16 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(runner.requests), 1)
         self.assertEqual(runner.requests[0].kind, RunKind.REVIEW)
         self.assertEqual(host.comments[0][0], 7)
-        self.assertIn("Suggested answer", host.comments[0][1])
+        self.assertIn(
+            "> Please help\n\n@alice Suggested answer",
+            host.comments[0][1],
+        )
         self.assertIn("<!-- agent-pipeline:", host.comments[0][1])
+        self.assertTrue(
+            host.comments[0][1].endswith(
+                "<sub> Made with test-model </sub>"
+            )
+        )
         self.assertEqual(worktrees.removed, [runner.requests[0].worktree])
 
     async def test_new_issue_creates_plan_only_pull_request(self) -> None:
@@ -221,6 +231,16 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(issue.plan_pr_number, 42)
         self.assertEqual(issue.plan_text, runner_output)
         self.assertEqual(host.pushed[1], "agent/plan-7")
+        self.assertTrue(
+            host.pull_request_bodies[0].endswith(
+                "<sub> Made with test-model </sub>"
+            )
+        )
+        self.assertTrue(
+            host.comments[0][1].endswith(
+                "<sub> Made with test-model </sub>"
+            )
+        )
 
     async def test_authorized_approval_creates_one_implementation_pr(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -254,7 +274,9 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
             async def implement(request: AgentRequest) -> AgentResult:
                 runner.requests.append(request)
                 (request.worktree / "feature.py").write_text("VALUE = 1\n")
-                return AgentResult(output="Implemented feature")
+                return AgentResult(
+                    "Implemented feature", (), "implementation-model"
+                )
 
             runner.run = implement
             processor = WorkflowProcessor(
@@ -274,12 +296,23 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(issue.implementation_run_id, run.id)
         self.assertEqual(issue.implementation_pr_number, 43)
         self.assertEqual(host.pushed[1], "agent/issue-7")
+        self.assertTrue(
+            host.pull_request_bodies[0].endswith(
+                "<sub> Made with implementation-model </sub>"
+            )
+        )
+        self.assertIn("> yes\n\n@alice Implementation ready:", host.comments[0][1])
+        self.assertTrue(
+            host.comments[0][1].endswith(
+                "<sub> Made with implementation-model </sub>"
+            )
+        )
 
 
 def _result_runner(runner: FakeAgentRunner, output: str):
     async def run(request: AgentRequest) -> AgentResult:
         runner.requests.append(request)
-        return AgentResult(output=output)
+        return AgentResult(output, (), "test-model")
 
     return run
 

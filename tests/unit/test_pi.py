@@ -37,6 +37,7 @@ class PiAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
                         "message": {
                             "role": "assistant",
                             "content": [{"type": "text", "text": "done"}],
+                            "model": "claude-test-model",
                         },
                     }))
                     """
@@ -58,14 +59,21 @@ class PiAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
                     "GITHUB_TOKEN": "must-not-leak",
                 },
             ):
-                result = await PiAgentRunner(str(executable)).run(request)
+                result = await PiAgentRunner(
+                    str(executable), model="selected-model"
+                ).run(request)
             invocation = json.loads(capture.read_text())
 
         self.assertEqual(result.output, "done")
+        self.assertEqual(result.model_name, "claude-test-model")
         self.assertEqual(invocation["cwd"], str(worktree))
         self.assertIsNone(invocation["github_token"])
         self.assertIn("--mode", invocation["args"])
         self.assertIn("read,grep", invocation["args"])
+        model_index = invocation["args"].index("--model")
+        self.assertEqual(invocation["args"][model_index + 1], "selected-model")
+        thinking_index = invocation["args"].index("--thinking")
+        self.assertEqual(invocation["args"][thinking_index + 1], "medium")
 
     async def test_production_runner_hides_sibling_worktrees_with_bubblewrap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -83,10 +91,11 @@ class PiAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
             with patch(
                 "agent_pipeline.pi.asyncio.create_subprocess_exec", spawn
             ):
-                await PiAgentRunner("/opt/pi", "pi-runner").run(
-                    _request(worktree, timeout_seconds=5)
-                )
+                result = await PiAgentRunner(
+                    "/opt/pi", "pi-runner", model="selected-model"
+                ).run(_request(worktree, timeout_seconds=5))
 
+        self.assertEqual(result.model_name, "selected-model")
         awaited = spawn.await_args
         if awaited is None:
             self.fail("Pi process was not started")
@@ -109,9 +118,9 @@ class PiAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
                 executable.write_text(f"#!/usr/bin/env python3\n{script}\n")
                 executable.chmod(0o755)
                 with self.assertRaises(AgentExecutionError) as raised:
-                    await PiAgentRunner(str(executable)).run(
-                        _request(worktree, timeout_seconds=5)
-                    )
+                    await PiAgentRunner(
+                        str(executable), model="selected-model"
+                    ).run(_request(worktree, timeout_seconds=5))
                 self.assertIn(expected, str(raised.exception))
 
     async def test_timeout_terminates_pi(self) -> None:
@@ -124,9 +133,9 @@ class PiAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
             executable.chmod(0o755)
 
             with self.assertRaises(AgentExecutionError) as raised:
-                await PiAgentRunner(str(executable)).run(
-                    _request(worktree, timeout_seconds=1)
-                )
+                await PiAgentRunner(
+                    str(executable), model="selected-model"
+                ).run(_request(worktree, timeout_seconds=1))
 
         self.assertIn("timed out", str(raised.exception))
 

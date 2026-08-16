@@ -79,6 +79,7 @@ class AgentRequest:
 class AgentResult:
     output: str
     events: tuple[Mapping[str, Any], ...] = ()
+    model_name: str = "Pi"
 
 
 class WebhookParser(Protocol):

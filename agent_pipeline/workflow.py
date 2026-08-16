@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import shlex
 from pathlib import Path
 from typing import Protocol
@@ -69,6 +70,7 @@ class WorkflowProcessor:
         worktrees: Workspace,
         agent_timeout_seconds: int,
         test_command: str,
+        model_name: str = "Pi",
     ) -> None:
         self.database = database
         self.code_host = code_host
@@ -76,6 +78,24 @@ class WorkflowProcessor:
         self.worktrees = worktrees
         self.agent_timeout_seconds = agent_timeout_seconds
         self.test_command = test_command
+        self.model_name = model_name
+
+    async def _post_comment(
+        self,
+        run: RunRecord,
+        body: str,
+        *,
+        model_name: str | None = None,
+        reply: bool = False,
+    ) -> str:
+        if reply and run.prompt_context:
+            body = as_comment_reply(run.actor, run.prompt_context, body)
+        marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
+        message = with_model_footer(
+            f"{body}\n\n{marker}",
+            model_name or self.model_name,
+        )
+        return await self.code_host.post_comment(run.reply_number, message)
 
     async def __call__(self, run: RunRecord) -> RunOutcome:
         if run.kind == RunKind.PLAN:
@@ -142,7 +162,10 @@ class WorkflowProcessor:
                 issue_number=run.issue_number,
                 branch=branch,
                 title=f"Plan issue #{run.issue_number}: {context.title}",
-                body=f"Plan-only change for #{run.issue_number}.",
+                body=with_model_footer(
+                    f"Plan-only change for #{run.issue_number}.",
+                    result.model_name,
+                ),
                 draft=False,
             )
             self.database.record_plan(
@@ -152,10 +175,10 @@ class WorkflowProcessor:
                 head_sha=head_sha,
                 plan_text=plan_text,
             )
-            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-            await self.code_host.post_comment(
-                run.reply_number,
-                f"Plan ready: {pull_request.url}\n\n{marker}",
+            await self._post_comment(
+                run,
+                f"Plan ready: {pull_request.url}",
+                model_name=result.model_name,
             )
             return RunOutcome(
                 output=plan_text,
@@ -187,10 +210,10 @@ class WorkflowProcessor:
                 issue.implementation_pr_number
             )
             message = "Implementation pull request already exists."
-            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-            await self.code_host.post_comment(
-                run.reply_number,
-                f"{message} {pull_request.url}\n\n{marker}",
+            await self._post_comment(
+                run,
+                f"{message} {pull_request.url}",
+                reply=bool(run.prompt_context),
             )
             return RunOutcome(
                 output=message,
@@ -205,10 +228,10 @@ class WorkflowProcessor:
                     current.implementation_pr_number
                 )
                 message = "Implementation pull request already exists."
-                marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-                await self.code_host.post_comment(
-                    run.reply_number,
-                    f"{message} {pull_request.url}\n\n{marker}",
+                await self._post_comment(
+                    run,
+                    f"{message} {pull_request.url}",
+                    reply=bool(run.prompt_context),
                 )
                 return RunOutcome(
                     output=message,
@@ -216,10 +239,10 @@ class WorkflowProcessor:
                     branch=pull_request.branch,
                 )
             message = "Implementation is already running."
-            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-            await self.code_host.post_comment(
-                run.reply_number,
-                f"{message}\n\n{marker}",
+            await self._post_comment(
+                run,
+                message,
+                reply=bool(run.prompt_context),
             )
             return RunOutcome(output=message)
 
@@ -298,7 +321,10 @@ class WorkflowProcessor:
                 issue_number=run.issue_number,
                 branch=branch,
                 title=f"Implement issue #{run.issue_number}: {context.title}",
-                body=f"Implements approved plan for #{run.issue_number}.",
+                body=with_model_footer(
+                    f"Implements approved plan for #{run.issue_number}.",
+                    result.model_name,
+                ),
                 draft=True,
             )
             self.database.record_implementation(
@@ -306,10 +332,11 @@ class WorkflowProcessor:
                 run_id=run.id,
                 pull_request_number=pull_request.number,
             )
-            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-            await self.code_host.post_comment(
-                run.reply_number,
-                f"Implementation ready: {pull_request.url}\n\n{marker}",
+            await self._post_comment(
+                run,
+                f"Implementation ready: {pull_request.url}",
+                model_name=result.model_name,
+                reply=command_trigger,
             )
             return RunOutcome(
                 output=result.output,
@@ -361,14 +388,30 @@ class WorkflowProcessor:
                 raise WorkflowError(
                     f"read-only review changed repository files: {', '.join(changed)}"
                 )
-            marker = f"<!-- agent-pipeline:{run.delivery_id} -->"
-            url = await self.code_host.post_comment(
-                run.reply_number,
-                f"{result.output}\n\n{marker}",
+            url = await self._post_comment(
+                run,
+                result.output,
+                model_name=result.model_name,
+                reply=True,
             )
             return RunOutcome(output=result.output, github_url=url)
         finally:
             await self.worktrees.remove(worktree)
+
+
+def with_model_footer(body: str, model_name: str) -> str:
+    safe_model_name = html.escape(model_name.strip() or "Pi")
+    return f"{body.rstrip()}\n\n<sub> Made with {safe_model_name} </sub>"
+
+
+def as_comment_reply(actor: str, original: str, response: str) -> str:
+    excerpt = original.strip() or "(empty comment)"
+    if len(excerpt) > 500:
+        excerpt = excerpt[:497] + "..."
+    quote = "\n".join(
+        f"> {line.replace('@', '@<!-- -->')}" for line in excerpt.splitlines()
+    )
+    return f"{quote}\n\n@{actor} {response}"
 
 
 def _plan_prompt(
