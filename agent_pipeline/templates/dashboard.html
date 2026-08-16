@@ -1,67 +1,113 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Pipeline</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
-</head>
-<body>
-  <main>
-    <header>
-      <h1>Agent Pipeline</h1>
-      <p>{{ runs|length }} recent runs</p>
-    </header>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Agent Pipeline</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', path='/app.css') }}"
+        />
+    </head>
+    <body>
+        <main>
+            <header>
+                <h1>Agent Pipeline</h1>
+                <p>{{ runs|length }} recent runs</p>
+            </header>
 
-    <section aria-labelledby="runs-heading">
-      <h2 id="runs-heading">Runs</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Status</th><th>Kind</th><th>Issue</th><th>Actor</th><th>Result</th><th>Action</th></tr></thead>
-          <tbody>
-          {% for run in runs %}
-            <tr>
-              <td><span class="status status-{{ run.status }}">{{ run.status }}</span></td>
-              <td>{{ run.kind }}</td>
-              <td>#{{ run.issue_number }}</td>
-              <td>{{ run.actor }}</td>
-              <td>
-                <a href="{{ url_for('run_detail', run_id=run.id) }}">details</a>
-                {% if run.github_url %} · <a href="{{ run.github_url }}">GitHub</a>{% endif %}
-                {% if run.error %}<div class="error">{{ run.error }}</div>{% endif %}
-              </td>
-              <td>
-                {% if run.status in ('failed', 'interrupted') %}
-                <form method="post" action="{{ url_for('retry_run', run_id=run.id) }}">
-                  <input type="hidden" name="csrf" value="{{ csrf(run.id) }}">
-                  <button type="submit">Retry</button>
-                </form>
-                {% endif %}
-              </td>
-            </tr>
-          {% else %}
-            <tr><td colspan="6">No runs yet.</td></tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
+            <section aria-labelledby="runs-heading">
+                <h2 id="runs-heading">Runs</h2>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Kind</th>
+                                <th>Issue</th>
+                                <th>Actor</th>
+                                <th>Result</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for run in runs %}
+                            <tr>
+                                <td>
+                                    <span class="status status-{{ run.status }}"
+                                        >{{ run.status }}</span
+                                    >
+                                </td>
+                                <td>{{ run.kind }}</td>
+                                <td>#{{ run.issue_number }}</td>
+                                <td>{{ run.actor }}</td>
+                                <td>
+                                    <a
+                                        href="{{ url_for('run_detail', run_id=run.id) }}"
+                                        >details</a
+                                    >
+                                    {% if run.github_url %} ·
+                                    <a href="{{ run.github_url }}">GitHub</a>{%
+                                    endif %} {% if run.error %}
+                                    <div class="error">{{ run.error }}</div>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if run.status in ('failed',
+                                    'interrupted') %}
+                                    <form
+                                        method="post"
+                                        action="{{ url_for('retry_run', run_id=run.id) }}"
+                                    >
+                                        <input
+                                            type="hidden"
+                                            name="csrf"
+                                            value="{{ csrf(run.id) }}"
+                                        />
+                                        <button type="submit">Retry</button>
+                                    </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6">No runs yet.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
 
-    <section aria-labelledby="deliveries-heading">
-      <h2 id="deliveries-heading">Webhook deliveries</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Received</th><th>Event</th><th>Action</th><th>Delivery</th></tr></thead>
-          <tbody>
-          {% for delivery in deliveries %}
-            <tr><td>{{ delivery.created_at }}</td><td>{{ delivery.event }}</td><td>{{ delivery.action }}</td><td><code>{{ delivery.id }}</code></td></tr>
-          {% else %}
-            <tr><td colspan="4">No deliveries yet.</td></tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-</body>
+            <section aria-labelledby="deliveries-heading">
+                <h2 id="deliveries-heading">Webhook deliveries</h2>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Received</th>
+                                <th>Event</th>
+                                <th>Action</th>
+                                <th>Delivery</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for delivery in deliveries %}
+                            <tr>
+                                <td>{{ delivery.created_at }}</td>
+                                <td>{{ delivery.event }}</td>
+                                <td>{{ delivery.action }}</td>
+                                <td><code>{{ delivery.id }}</code></td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4">No deliveries yet.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </body>
 </html>
