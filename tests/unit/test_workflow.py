@@ -23,6 +23,8 @@ class FakeCodeHost:
     def __init__(self) -> None:
         self.comments: list[tuple[int, str]] = []
         self.pull_request_bodies: list[str] = []
+        self.pull_requests: dict[int, PullRequest] = {}
+        self.next_pull_request_number: int | None = None
         self.write_permission = True
 
     async def fetch_context(self, _event: object) -> ConversationContext:
@@ -43,11 +45,14 @@ class FakeCodeHost:
         return "https://github.test/comments/1"
 
     async def pull_request(self, number: int) -> PullRequest:
-        return PullRequest(
-            number=number,
-            url=f"https://github.test/pulls/{number}",
-            branch="agent/plan-7",
-            head_sha="plan-sha",
+        return self.pull_requests.get(
+            number,
+            PullRequest(
+                number=number,
+                url=f"https://github.test/pulls/{number}",
+                branch="agent/plan-7",
+                head_sha="plan-sha",
+            ),
         )
 
     async def pull_request_files(self, number: int) -> dict[str, str]:
@@ -69,7 +74,7 @@ class FakeCodeHost:
         draft: bool,
     ) -> PullRequest:
         self.pull_request_bodies.append(body)
-        number = 43 if draft else 42
+        number = self.next_pull_request_number or (43 if draft else 42)
         return PullRequest(
             number=number,
             url=f"https://github.test/pulls/{number}",
@@ -96,7 +101,7 @@ class FakeWorktrees:
         self, run_id: str, *, ref: str, branch: str | None = None
     ) -> Path:
         path = self.root / run_id
-        path.mkdir(parents=True)
+        path.mkdir(parents=True, exist_ok=True)
         return path
 
     async def changed_files(self, worktree: Path) -> tuple[str, ...]:
@@ -306,6 +311,309 @@ class WorkflowProcessorTests(unittest.IsolatedAsyncioTestCase):
             host.comments[0][1].endswith(
                 "<sub> Made with implementation-model </sub>"
             )
+        )
+
+
+    async def test_decision_recreates_closed_plan_pull_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="old-plan-run",
+                pull_request_number=42,
+                head_sha="old-plan-sha",
+                plan_text="# Old plan\n",
+            )
+            database.record_delivery(
+                "replacement-delivery", "issue_comment", "created", "{}"
+            )
+            database.enqueue_run(
+                delivery_id="replacement-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="alice",
+                prompt_context="The first PR was discarded; create a new one.",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            host.pull_requests[42] = PullRequest(
+                number=42,
+                url="https://github.test/pulls/42",
+                branch="agent/plan-7",
+                head_sha="old-plan-sha",
+                closed=True,
+            )
+            host.next_pull_request_number = 44
+            runner = FakeAgentRunner()
+            results = iter(
+                (
+                    AgentResult(
+                        '{"action":"recreate_plan","message":"",'
+                        '"evidence":"create a new one"}',
+                        (),
+                        "decision-model",
+                    ),
+                    AgentResult("# Replacement plan", (), "planning-model"),
+                )
+            )
+
+            async def run_agent(request: AgentRequest) -> AgentResult:
+                runner.requests.append(request)
+                return next(results)
+
+            runner.run = run_agent
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=FakeWorktrees(root / "worktrees"),
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            outcome = await processor(run)
+            issue = database.get_issue(7)
+
+        self.assertEqual([request.kind for request in runner.requests], [
+            RunKind.DECISION,
+            RunKind.PLAN,
+        ])
+        self.assertEqual(issue.plan_pr_number, 44)
+        self.assertEqual(outcome.github_url, "https://github.test/pulls/44")
+        if outcome.branch is None:
+            self.fail("replacement branch was not recorded")
+        self.assertTrue(outcome.branch.startswith("agent/plan-7-"))
+
+    async def test_decision_blocks_recreation_without_write_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="old-plan-run",
+                pull_request_number=42,
+                head_sha="old-plan-sha",
+                plan_text="# Old plan\n",
+            )
+            database.record_delivery(
+                "blocked-delivery", "issue_comment", "created", "{}"
+            )
+            database.enqueue_run(
+                delivery_id="blocked-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="mallory",
+                prompt_context="Create a new plan PR.",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            host.write_permission = False
+            host.pull_requests[42] = PullRequest(
+                number=42,
+                url="https://github.test/pulls/42",
+                branch="agent/plan-7",
+                head_sha="old-plan-sha",
+                closed=True,
+            )
+            runner = FakeAgentRunner()
+            runner.run = _result_runner(
+                runner,
+                '{"action":"recreate_plan","message":"",'
+                '"evidence":"Create a new plan PR"}',
+            )
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=FakeWorktrees(root / "worktrees"),
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            await processor(run)
+
+        self.assertEqual(len(runner.requests), 1)
+        self.assertIn("write access", host.comments[0][1])
+
+    async def test_lifecycle_event_body_cannot_authorize_recreation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="old-plan-run",
+                pull_request_number=42,
+                head_sha="old-plan-sha",
+                plan_text="# Old plan\n",
+            )
+            database.record_delivery("edited-delivery", "issues", "edited", "{}")
+            database.enqueue_run(
+                delivery_id="edited-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="maintainer",
+                prompt_context="Create a new plan PR.",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            host.pull_requests[42] = PullRequest(
+                number=42,
+                url="https://github.test/pulls/42",
+                branch="agent/plan-7",
+                head_sha="old-plan-sha",
+                closed=True,
+            )
+            runner = FakeAgentRunner()
+            runner.run = _result_runner(
+                runner,
+                '{"action":"recreate_plan","message":"",'
+                '"evidence":"Create a new plan PR"}',
+            )
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=FakeWorktrees(root / "worktrees"),
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            await processor(run)
+
+        self.assertEqual(len(runner.requests), 1)
+        self.assertIn("explicitly confirm", host.comments[0][1])
+
+    async def test_decision_recreates_closed_implementation_pr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="plan-run",
+                pull_request_number=42,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+            database.reserve_implementation(7, "old-implementation-run")
+            database.record_implementation(
+                issue_number=7,
+                run_id="old-implementation-run",
+                pull_request_number=43,
+            )
+            database.record_delivery(
+                "replacement-delivery", "issue_comment", "created", "{}"
+            )
+            database.enqueue_run(
+                delivery_id="replacement-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="alice",
+                prompt_context="Create a new implementation PR.",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            host.pull_requests[43] = PullRequest(
+                number=43,
+                url="https://github.test/pulls/43",
+                branch="agent/issue-7",
+                head_sha="old-implementation-sha",
+                closed=True,
+            )
+            host.next_pull_request_number = 45
+            runner = FakeAgentRunner()
+            calls = 0
+
+            async def run_agent(request: AgentRequest) -> AgentResult:
+                nonlocal calls
+                calls += 1
+                runner.requests.append(request)
+                if calls == 1:
+                    return AgentResult(
+                        '{"action":"recreate_implementation","message":"",'
+                        '"evidence":"Create a new implementation PR"}',
+                        (),
+                        "decision-model",
+                    )
+                (request.worktree / "feature.py").write_text("VALUE = 2\n")
+                return AgentResult("Implemented replacement", (), "coding-model")
+
+            runner.run = run_agent
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=FakeWorktrees(root / "worktrees"),
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            outcome = await processor(run)
+            issue = database.get_issue(7)
+
+        self.assertEqual([request.kind for request in runner.requests], [
+            RunKind.DECISION,
+            RunKind.IMPLEMENTATION,
+        ])
+        self.assertEqual(issue.implementation_pr_number, 45)
+        self.assertEqual(outcome.github_url, "https://github.test/pulls/45")
+        if outcome.branch is None:
+            self.fail("replacement branch was not recorded")
+        self.assertTrue(outcome.branch.startswith("agent/issue-7-"))
+
+    async def test_uncertain_decision_asks_in_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = Database(root / "app.db")
+            database.initialize()
+            database.record_delivery("question-delivery", "issues", "edited", "{}")
+            database.enqueue_run(
+                delivery_id="question-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="alice",
+                prompt_context="Maybe change this somehow",
+            )
+            run = database.claim_next_run()
+            if run is None:
+                self.fail("run was not queued")
+            host = FakeCodeHost()
+            runner = FakeAgentRunner()
+            runner.run = _result_runner(
+                runner,
+                '{"action":"ask","message":"Which change do you want?",'
+                '"evidence":""}',
+            )
+            processor = WorkflowProcessor(
+                database=database,
+                code_host=cast(CodeHost, host),
+                agent_runner=cast(AgentRunner, runner),
+                worktrees=FakeWorktrees(root / "worktrees"),
+                agent_timeout_seconds=30,
+                test_command="./tests.sh",
+            )
+
+            await processor(run)
+            recorded_action = database.get_run(run.id).decision_action
+
+        self.assertEqual(len(runner.requests), 1)
+        self.assertEqual(runner.requests[0].kind, RunKind.DECISION)
+        self.assertEqual(recorded_action, "comment")
+        self.assertIn(
+            "> Maybe change this somehow\n\n@alice Which change do you want?",
+            host.comments[0][1],
         )
 
 

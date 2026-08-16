@@ -14,12 +14,14 @@ class EventKind(StrEnum):
     ISSUE_OPENED = "issue_opened"
     COMMENT = "comment"
     PLAN_MERGED = "plan_merged"
+    ISSUE = "issue"
 
 
 class RunKind(StrEnum):
     PLAN = "plan"
     REVIEW = "review"
     IMPLEMENTATION = "implementation"
+    DECISION = "decision"
 
 
 class RunStatus(StrEnum):
@@ -63,6 +65,7 @@ class PullRequest:
     branch: str
     head_sha: str
     merged: bool = False
+    closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

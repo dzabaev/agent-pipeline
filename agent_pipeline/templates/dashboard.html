@@ -23,7 +23,7 @@
                         <thead>
                             <tr>
                                 <th>Status</th>
-                                <th>Kind</th>
+                                <th>Action</th>
                                 <th>Issue</th>
                                 <th>Actor</th>
                                 <th>Result</th>
@@ -38,7 +38,7 @@
                                         >{{ run.status }}</span
                                     >
                                 </td>
-                                <td>{{ run.kind }}</td>
+                                <td>{{ run.decision_action or run.kind }}</td>
                                 <td>#{{ run.issue_number }}</td>
                                 <td>{{ run.actor }}</td>
                                 <td>

@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +122,124 @@ class DatabaseTests(unittest.TestCase):
             database.fail_run(run_id, "failed")
 
             self.assertTrue(database.reserve_implementation(9, "retry-run"))
+
+    def test_initialize_migrates_existing_runs_for_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.db"
+            with sqlite3.connect(path) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE deliveries (
+                        id TEXT PRIMARY KEY, event TEXT NOT NULL,
+                        action TEXT NOT NULL, payload_json TEXT NOT NULL,
+                        disposition TEXT NOT NULL DEFAULT 'received',
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE TABLE runs (
+                        id TEXT PRIMARY KEY,
+                        delivery_id TEXT NOT NULL REFERENCES deliveries(id),
+                        issue_number INTEGER NOT NULL,
+                        kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation')),
+                        status TEXT NOT NULL,
+                        attempt INTEGER NOT NULL DEFAULT 0,
+                        actor TEXT NOT NULL,
+                        actor_permission TEXT,
+                        prompt_context TEXT NOT NULL,
+                        output TEXT,
+                        error TEXT,
+                        branch TEXT,
+                        worktree_path TEXT,
+                        github_url TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    ALTER TABLE runs ADD COLUMN reply_number INTEGER NOT NULL DEFAULT 0;
+                    INSERT INTO deliveries(id, event, action, payload_json, created_at)
+                    VALUES ('old-delivery', 'issue_comment', 'created', '{}', 'now');
+                    INSERT INTO runs(
+                        id, delivery_id, issue_number, reply_number, kind, status,
+                        actor, prompt_context, created_at, updated_at
+                    ) VALUES (
+                        'old-run', 'old-delivery', 7, 9, 'review', 'succeeded',
+                        'alice', 'old', 'now', 'now'
+                    );
+                    """
+                )
+            database = Database(path)
+            database.initialize()
+            database.record_delivery(
+                "decision-delivery", "issue_comment", "created", "{}"
+            )
+            decision_run = database.enqueue_run(
+                delivery_id="decision-delivery",
+                issue_number=7,
+                kind=RunKind.DECISION,
+                actor="alice",
+                prompt_context="new",
+            )
+
+            migrated = database.get_run("old-run")
+            decision = database.get_run(decision_run)
+
+        self.assertEqual(migrated.reply_number, 9)
+        self.assertEqual(migrated.kind, RunKind.REVIEW)
+        self.assertEqual(decision.kind, RunKind.DECISION)
+
+    def test_only_one_run_can_reserve_plan_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="old-plan-run",
+                pull_request_number=42,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+
+            first = database.reserve_plan(
+                7,
+                "replacement-a",
+                previous_pull_request_number=42,
+                previous_run_id="old-plan-run",
+            )
+            second = database.reserve_plan(
+                7,
+                "replacement-b",
+                previous_pull_request_number=42,
+                previous_run_id="old-plan-run",
+            )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+
+    def test_only_one_run_can_reserve_implementation_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "app.db")
+            database.initialize()
+            database.record_plan(
+                issue_number=7,
+                run_id="plan-run",
+                pull_request_number=42,
+                head_sha="plan-sha",
+                plan_text="# Plan\n",
+            )
+            database.reserve_implementation(7, "old-run")
+            database.record_implementation(
+                issue_number=7,
+                run_id="old-run",
+                pull_request_number=43,
+            )
+
+            first = database.reserve_implementation_replacement(
+                7, "replacement-a", 43, "old-run"
+            )
+            second = database.reserve_implementation_replacement(
+                7, "replacement-b", 43, "old-run"
+            )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
 
 
 if __name__ == "__main__":

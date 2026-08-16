@@ -16,6 +16,7 @@ class RunRecord:
     issue_number: int
     reply_number: int
     kind: RunKind
+    decision_action: str | None
     status: RunStatus
     attempt: int
     actor: str
@@ -87,7 +88,8 @@ class Database:
                     delivery_id TEXT NOT NULL REFERENCES deliveries(id),
                     issue_number INTEGER NOT NULL,
                     reply_number INTEGER NOT NULL,
-                    kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation')),
+                    kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation', 'decision')),
+                    decision_action TEXT,
                     status TEXT NOT NULL CHECK (
                         status IN ('queued', 'running', 'publishing', 'succeeded', 'failed', 'interrupted')
                     ),
@@ -119,6 +121,55 @@ class Database:
                 connection.execute(
                     "UPDATE runs SET reply_number = issue_number WHERE reply_number = 0"
                 )
+            run_schema = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'"
+            ).fetchone()["sql"]
+            if "'decision'" not in run_schema:
+                connection.executescript(
+                    """
+                    CREATE TABLE runs_v2 (
+                        id TEXT PRIMARY KEY,
+                        delivery_id TEXT NOT NULL REFERENCES deliveries(id),
+                        issue_number INTEGER NOT NULL,
+                        reply_number INTEGER NOT NULL,
+                        kind TEXT NOT NULL CHECK (kind IN ('plan', 'review', 'implementation', 'decision')),
+                        decision_action TEXT,
+                        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'publishing', 'succeeded', 'failed', 'interrupted')),
+                        attempt INTEGER NOT NULL DEFAULT 0,
+                        actor TEXT NOT NULL,
+                        actor_permission TEXT,
+                        prompt_context TEXT NOT NULL,
+                        output TEXT,
+                        error TEXT,
+                        branch TEXT,
+                        worktree_path TEXT,
+                        github_url TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO runs_v2(
+                        id, delivery_id, issue_number, reply_number, kind,
+                        decision_action, status, attempt, actor, actor_permission,
+                        prompt_context, output, error, branch, worktree_path,
+                        github_url, created_at, updated_at
+                    )
+                    SELECT
+                        id, delivery_id, issue_number, reply_number, kind, NULL,
+                        status, attempt, actor, actor_permission, prompt_context,
+                        output, error, branch, worktree_path, github_url, created_at,
+                        updated_at
+                    FROM runs;
+                    DROP TABLE runs;
+                    ALTER TABLE runs_v2 RENAME TO runs;
+                    CREATE INDEX runs_queue ON runs(status, created_at);
+                    """
+                )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            if "decision_action" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN decision_action TEXT")
 
     def healthcheck(self) -> None:
         with self._connect() as connection:
@@ -282,6 +333,24 @@ class Database:
             raise KeyError(run_id)
         return _run_from_row(row)
 
+    def record_decision_action(self, run_id: str, action: str) -> None:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE runs SET decision_action = ?, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    action,
+                    _now(),
+                    run_id,
+                    RunStatus.RUNNING,
+                    RunStatus.PUBLISHING,
+                ),
+            ).rowcount
+        if not updated:
+            raise KeyError(run_id)
+
     def list_runs(self, limit: int = 100) -> tuple[RunRecord, ...]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -289,6 +358,15 @@ class Database:
                 (limit,),
             ).fetchall()
         return tuple(_run_from_row(row) for row in rows)
+
+    def get_delivery(self, delivery_id: str) -> DeliveryRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM deliveries WHERE id = ?", (delivery_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(delivery_id)
+        return _delivery_from_row(row)
 
     def list_deliveries(self, limit: int = 100) -> tuple[DeliveryRecord, ...]:
         with self._connect() as connection:
@@ -307,7 +385,7 @@ class Database:
                 """
                 UPDATE runs
                 SET status = ?, error = NULL, output = NULL,
-                    worktree_path = NULL, updated_at = ?
+                    worktree_path = NULL, decision_action = NULL, updated_at = ?
                 WHERE id = ? AND status IN (?, ?)
                 """,
                 (
@@ -318,6 +396,55 @@ class Database:
                     RunStatus.INTERRUPTED,
                 ),
             ).rowcount
+        return bool(updated)
+
+    def reserve_plan(
+        self,
+        issue_number: int,
+        run_id: str,
+        *,
+        previous_pull_request_number: int | None = None,
+        previous_run_id: str | None = None,
+    ) -> bool:
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if previous_pull_request_number is None:
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO issues(
+                        number, plan_run_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (issue_number, run_id, now, now),
+                ).rowcount
+                if inserted:
+                    connection.commit()
+                    return True
+                updated = connection.execute(
+                    """
+                    UPDATE issues SET plan_run_id = ?, updated_at = ?
+                    WHERE number = ? AND plan_pr_number IS NULL
+                    AND plan_run_id IS NULL
+                    """,
+                    (run_id, now, issue_number),
+                ).rowcount
+            else:
+                updated = connection.execute(
+                    """
+                    UPDATE issues SET plan_run_id = ?, updated_at = ?
+                    WHERE number = ? AND plan_pr_number = ?
+                    AND plan_run_id IS ?
+                    """,
+                    (
+                        run_id,
+                        now,
+                        issue_number,
+                        previous_pull_request_number,
+                        previous_run_id,
+                    ),
+                ).rowcount
+            connection.commit()
         return bool(updated)
 
     def record_plan(
@@ -399,6 +526,31 @@ class Database:
             connection.commit()
         return bool(updated)
 
+    def reserve_implementation_replacement(
+        self,
+        issue_number: int,
+        run_id: str,
+        previous_pull_request_number: int,
+        previous_run_id: str | None = None,
+    ) -> bool:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE issues
+                SET implementation_run_id = ?, updated_at = ?
+                WHERE number = ? AND implementation_pr_number = ?
+                AND implementation_run_id IS ?
+                """,
+                (
+                    run_id,
+                    _now(),
+                    issue_number,
+                    previous_pull_request_number,
+                    previous_run_id,
+                ),
+            ).rowcount
+        return bool(updated)
+
     def record_implementation(
         self,
         *,
@@ -478,13 +630,20 @@ class Database:
                 ),
             ).rowcount
             if updated:
+                now = _now()
                 connection.execute(
                     """
                     UPDATE issues SET implementation_run_id = NULL, updated_at = ?
                     WHERE implementation_run_id = ?
-                    AND implementation_pr_number IS NULL
                     """,
-                    (_now(), run_id),
+                    (now, run_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE issues SET plan_run_id = NULL, updated_at = ?
+                    WHERE plan_run_id = ?
+                    """,
+                    (now, run_id),
                 )
             connection.commit()
         if not updated:
@@ -532,6 +691,15 @@ class Database:
                 """,
                 (now, RunStatus.INTERRUPTED),
             )
+            connection.execute(
+                """
+                UPDATE issues SET plan_run_id = NULL, updated_at = ?
+                WHERE plan_run_id IN (
+                    SELECT id FROM runs WHERE status = ?
+                )
+                """,
+                (now, RunStatus.INTERRUPTED),
+            )
             connection.commit()
         return updated
 
@@ -555,6 +723,7 @@ def _run_from_row(row: sqlite3.Row) -> RunRecord:
         issue_number=row["issue_number"],
         reply_number=row["reply_number"],
         kind=RunKind(row["kind"]),
+        decision_action=row["decision_action"],
         status=RunStatus(row["status"]),
         attempt=row["attempt"],
         actor=row["actor"],

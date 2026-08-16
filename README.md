@@ -4,11 +4,11 @@ Small FastAPI service that turns GitHub events into isolated Pi agent runs.
 
 ## Workflow
 
-- New issue → read-only Pi run → plan-only PR at `plans/issues/<number>.md`.
-- Human comment → read-only Pi review → one GitHub reply.
-- Plan PR merge or approved command → Pi implementation → draft code PR.
-- Approved commands use complete phrases such as `/pi implement`, `yes`, `agreed`, `do that`, or `proceed`. Mixed comments do not trigger code.
-- Only users with GitHub `write`, `maintain`, or `admin` permission can approve implementation.
+- Every recognized human issue, comment, or review event starts a read-only Pi decision run.
+- Decision run reads issue context and current plan/implementation PR state, then chooses: plan, reply, implement, recreate a discarded PR, ask for clarification, or do nothing.
+- Uncertain intent produces a contextual GitHub question; its answer arrives as another event.
+- Implementation and PR recreation require explicit evidence from latest message plus GitHub `write`, `maintain`, or `admin` permission.
+- Replacement PRs are allowed only when previous PR is closed and unmerged; replacement gets unique branch.
 - `MAX_CONCURRENT_AGENTS` controls parallel runs. Every run gets its own git worktree.
 
 The app never merges pull requests.
@@ -53,7 +53,7 @@ Create repository webhook:
 - URL: `https://<domain>/webhooks/github`
 - Content type: `application/json`
 - Secret: same value as `GITHUB_WEBHOOK_SECRET`
-- Events: Issues, Issue comments, Pull requests, Pull request reviews, Pull request review comments
+- Events: Issues, Issue comments, Pull request reviews, Pull request review comments
 
 Set `GITHUB_BOT_LOGIN` to machine-account login. App ignores that login and its hidden publication markers to prevent comment loops.
 

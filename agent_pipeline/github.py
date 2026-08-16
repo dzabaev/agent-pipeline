@@ -308,11 +308,13 @@ class GitHubCodeHost:
         if not actor:
             raise WebhookRejected("GitHub webhook sender is missing")
 
-        if event_name == "issues" and action == "opened":
+        if event_name == "issues" and action and not self._ignore_comment(
+            sender, actor, ""
+        ):
             issue = _mapping(payload.get("issue"))
             return _event(
                 delivery_id,
-                EventKind.ISSUE_OPENED,
+                EventKind.ISSUE_OPENED if action == "opened" else EventKind.ISSUE,
                 event_name,
                 action,
                 issue,
@@ -364,7 +366,9 @@ class GitHubCodeHost:
             pull_request = _mapping(payload.get("pull_request"))
             review = _mapping(payload.get("review"))
             body_text = str(review.get("body", "")).strip()
-            if not body_text or self._ignore_comment(sender, actor, body_text):
+            if not body_text:
+                body_text = f"Review state: {_text(review.get('state')) or 'submitted'}"
+            if self._ignore_comment(sender, actor, body_text):
                 return None
             number = _number(pull_request)
             return CodeHostEvent(
@@ -379,27 +383,6 @@ class GitHubCodeHost:
                 pull_request_number=number,
                 raw_payload=payload,
             )
-
-        if event_name == "pull_request" and action == "closed":
-            pull_request = _mapping(payload.get("pull_request"))
-            head = _mapping(pull_request.get("head"))
-            branch = str(head.get("ref", ""))
-            if bool(pull_request.get("merged")) and branch.startswith("agent/plan-"):
-                try:
-                    issue_number = int(branch.removeprefix("agent/plan-"))
-                except ValueError:
-                    return None
-                return CodeHostEvent(
-                    delivery_id=delivery_id,
-                    kind=EventKind.PLAN_MERGED,
-                    event_name=event_name,
-                    action=action,
-                    issue_number=issue_number,
-                    actor=actor,
-                    source_url=str(pull_request.get("html_url", "")),
-                    pull_request_number=_number(pull_request),
-                    raw_payload=payload,
-                )
 
         return None
 
@@ -450,6 +433,7 @@ def _pull_request(payload: Mapping[str, Any]) -> PullRequest:
         branch=_text(head.get("ref")),
         head_sha=_text(head.get("sha")),
         merged=bool(payload.get("merged")),
+        closed=str(payload.get("state", "")).casefold() == "closed",
     )
 
 

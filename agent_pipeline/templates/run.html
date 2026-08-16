@@ -12,7 +12,9 @@
   <body>
     <main>
       <p><a href="{{ url_for('dashboard') }}">← All runs</a></p>
-      <h1>{{ run.kind }} for issue #{{ run.issue_number }}</h1>
+      <h1>
+        {{ run.decision_action or run.kind }} for issue #{{ run.issue_number }}
+      </h1>
       <dl>
         <dt>Status</dt>
         <dd>

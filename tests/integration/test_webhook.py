@@ -60,7 +60,7 @@ class WebhookIntegrationTests(unittest.IsolatedAsyncioTestCase):
         if claimed is None:
             self.fail("plan run was not queued")
         self.assertEqual(claimed.issue_number, 12)
-        self.assertEqual(claimed.kind, "plan")
+        self.assertEqual(claimed.kind, RunKind.DECISION)
         self.assertIsNone(no_second_run)
 
     async def test_plan_pull_request_comment_maps_back_to_issue(self) -> None:
@@ -151,7 +151,7 @@ class WebhookIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.fail("review run was not queued")
         self.assertEqual(claimed.issue_number, 12)
         self.assertEqual(claimed.reply_number, 101)
-        self.assertEqual(claimed.kind, RunKind.REVIEW)
+        self.assertEqual(claimed.kind, RunKind.DECISION)
         self.assertIsNone(no_forged_run)
 
     @staticmethod

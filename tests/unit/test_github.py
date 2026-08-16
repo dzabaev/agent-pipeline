@@ -47,6 +47,26 @@ class GitHubWebhookTests(unittest.TestCase):
         self.assertEqual(event.actor, "alice")
         self.assertEqual(event.body, "Please fix it")
 
+    def test_ignores_pull_request_events(self) -> None:
+        body = json.dumps(
+            {
+                "action": "closed",
+                "pull_request": {
+                    "number": 44,
+                    "body": "Discarded",
+                    "html_url": "https://github.test/pulls/44",
+                    "head": {"ref": "agent/plan-12", "sha": "head"},
+                    "merged": False,
+                },
+                "sender": {"login": "alice", "type": "User"},
+            }
+        ).encode()
+        event = self.host.parse_webhook(
+            self._headers("pull_request", body), body
+        )
+
+        self.assertIsNone(event)
+
     def test_rejects_invalid_signature(self) -> None:
         body = b"{}"
         headers = self._headers("issues", body) | {
@@ -127,6 +147,7 @@ class GitHubApiTests(unittest.IsolatedAsyncioTestCase):
                         "head": {"ref": "agent/issue-12", "sha": "head"},
                         "base": {"ref": "main"},
                         "merged": False,
+                        "state": "closed",
                     }
                 ],
             )
@@ -151,6 +172,7 @@ class GitHubApiTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(pull_request.number, 44)
+        self.assertTrue(pull_request.closed)
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0].url.params["state"], "all")
 

@@ -19,18 +19,13 @@ from fastapi.responses import RedirectResponse  # pyright: ignore[reportMissingI
 from fastapi.staticfiles import StaticFiles  # pyright: ignore[reportMissingImports]
 from fastapi.templating import Jinja2Templates  # pyright: ignore[reportMissingImports]
 
-from .contracts import AgentRunner, CodeHost, EventKind, RunKind, WebhookError
+from .contracts import AgentRunner, CodeHost, RunKind, WebhookError
 from .db import Database
 from .github import GitHubCodeHost  # pyright: ignore[reportMissingImports]
 from .pi import PiAgentRunner  # pyright: ignore[reportMissingImports]
 from .settings import Settings
 from .worker import WorkerPool  # pyright: ignore[reportMissingImports]
-from .workflow import (  # pyright: ignore[reportMissingImports]
-    WorkflowProcessor,
-    as_comment_reply,
-    is_implementation_command,
-    with_model_footer,
-)
+from .workflow import WorkflowProcessor  # pyright: ignore[reportMissingImports]
 from .worktrees import WorktreeManager  # pyright: ignore[reportMissingImports]
 
 
@@ -234,31 +229,13 @@ def create_app(
         if event is None:
             return {"status": "ignored"}
 
-        run_kind = {
-            EventKind.ISSUE_OPENED: RunKind.PLAN,
-            EventKind.COMMENT: (
-                RunKind.IMPLEMENTATION
-                if is_implementation_command(event.body)
-                else RunKind.REVIEW
-            ),
-            EventKind.PLAN_MERGED: RunKind.IMPLEMENTATION,
-        }[event.kind]
         reply_number = event.pull_request_number or event.issue_number
         issue_number = event.issue_number
         if event.pull_request_number is not None:
             mapped_issue = active_database.issue_for_pull_request(
                 event.pull_request_number
             )
-            if event.kind is EventKind.PLAN_MERGED and mapped_issue is None:
-                return {"status": "ignored"}
             issue_number = mapped_issue or issue_number
-        reserve_implementation = False
-        if run_kind is RunKind.IMPLEMENTATION:
-            issue = active_database.find_issue(issue_number)
-            if issue is not None and issue.plan_pr_number is not None:
-                reserve_implementation = await active_code_host.has_write_permission(
-                    event.actor
-                )
         run_id = active_database.ingest_run(
             delivery_id=event.delivery_id,
             event=event.event_name,
@@ -266,35 +243,12 @@ def create_app(
             payload_json=body.decode("utf-8"),
             issue_number=issue_number,
             reply_number=reply_number,
-            kind=run_kind,
+            kind=RunKind.DECISION,
             actor=event.actor,
             prompt_context=event.body,
-            reserve_implementation=reserve_implementation,
         )
-        if run_id is None and not reserve_implementation:
+        if run_id is None:
             return {"status": "duplicate"}
-        if not run_id:
-            issue = active_database.get_issue(issue_number)
-            message = "Implementation is already running."
-            if issue.implementation_pr_number is not None:
-                pull_request = await active_code_host.pull_request(
-                    issue.implementation_pr_number
-                )
-                message = (
-                    "Implementation pull request already exists: "
-                    f"{pull_request.url}"
-                )
-            marker = f"<!-- agent-pipeline:{event.delivery_id} -->"
-            if event.body:
-                message = as_comment_reply(event.actor, event.body, message)
-            message = with_model_footer(
-                f"{message}\n\n{marker}",
-                configured.model if configured is not None else "Pi",
-            )
-            await active_code_host.post_comment(reply_number, message)
-            return {
-                "status": "duplicate" if run_id is None else "already_queued"
-            }
         return {"status": "queued", "run_id": run_id}
 
     @app.get("/healthz")

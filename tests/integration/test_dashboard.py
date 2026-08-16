@@ -35,13 +35,14 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
             run_id = database.enqueue_run(
                 delivery_id="delivery-1",
                 issue_number=7,
-                kind=RunKind.PLAN,
+                kind=RunKind.DECISION,
                 actor="alice",
                 prompt_context="plan",
             )
             claimed = database.claim_next_run()
             if claimed is None:
                 self.fail("run was not queued")
+            database.record_decision_action(run_id, "comment")
             database.fail_run(run_id, "failed deliberately")
             host = GitHubCodeHost(
                 repository=settings.github_repository,
@@ -87,6 +88,7 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("failed deliberately", dashboard.text)
+        self.assertIn(">comment<", dashboard.text)
         self.assertIn(
             'href="https://app.test/agent_runner/static/app.css"',
             dashboard.text,
@@ -105,6 +107,7 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
             f"https://app.test/agent_runner/runs/{run_id}",
         )
         self.assertEqual(run.status, RunStatus.QUEUED)
+        self.assertIsNone(run.decision_action)
 
 
 if __name__ == "__main__":
