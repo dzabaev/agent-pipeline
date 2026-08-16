@@ -210,7 +210,10 @@ def create_app(
             raise HTTPException(status_code=403, detail="invalid CSRF token")
         if not active_database.retry_run(run_id):
             raise HTTPException(status_code=409, detail="run cannot be retried")
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+        return RedirectResponse(
+            url=str(request.url_for("run_detail", run_id=run_id)),
+            status_code=303,
+        )
 
     @app.post("/webhooks/github", status_code=status.HTTP_202_ACCEPTED)
     async def github_webhook(request: Request) -> dict[str, str]:

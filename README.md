@@ -141,6 +141,32 @@ sudo systemctl enable --now agent-pipeline caddy
 curl -fsS https://<domain>/healthz
 ```
 
+### Nginx subpath
+
+For `https://azamat.tech/agent_runner/`, add to `/etc/agent-pipeline.env`:
+
+```dotenv
+ROOT_PATH=/agent_runner
+FORWARDED_ALLOW_IPS=127.0.0.1
+```
+
+Use a trailing slash on `proxy_pass` so Nginx strips the public prefix before forwarding:
+
+```nginx
+location = /agent_runner {
+    return 301 /agent_runner/;
+}
+
+location /agent_runner/ {
+    proxy_pass http://127.0.0.1:8000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Do not add a trailing slash to `ROOT_PATH`. If Nginx runs on another host, set `FORWARDED_ALLOW_IPS` to that proxy's IP. The webhook URL becomes `https://azamat.tech/agent_runner/webhooks/github`.
+
 Inspect failures:
 
 ```bash

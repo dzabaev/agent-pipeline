@@ -9,7 +9,7 @@
 </head>
 <body>
   <main>
-    <p><a href="/">← All runs</a></p>
+    <p><a href="{{ url_for('dashboard') }}">← All runs</a></p>
     <h1>{{ run.kind }} for issue #{{ run.issue_number }}</h1>
     <dl>
       <dt>Status</dt><dd><span class="status status-{{ run.status }}">{{ run.status }}</span></dd>
@@ -19,7 +19,7 @@
       {% if run.github_url %}<dt>GitHub</dt><dd><a href="{{ run.github_url }}">{{ run.github_url }}</a></dd>{% endif %}
     </dl>
     {% if run.status in ('failed', 'interrupted') %}
-    <form method="post" action="/runs/{{ run.id }}/retry">
+    <form method="post" action="{{ url_for('retry_run', run_id=run.id) }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button type="submit">Retry</button>
     </form>

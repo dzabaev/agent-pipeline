@@ -54,7 +54,10 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 code_host=host,
                 start_workers=False,
             )
-            transport = httpx.ASGITransport(app=app)
+            transport = httpx.ASGITransport(
+                app=app,
+                root_path="/agent_runner",
+            )
 
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(
@@ -82,7 +85,23 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("failed deliberately", dashboard.text)
+        self.assertIn(
+            'href="https://app.test/agent_runner/static/app.css"',
+            dashboard.text,
+        )
+        self.assertIn(
+            f'href="https://app.test/agent_runner/runs/{run_id}"',
+            dashboard.text,
+        )
+        self.assertIn(
+            f'action="https://app.test/agent_runner/runs/{run_id}/retry"',
+            dashboard.text,
+        )
         self.assertEqual(retried.status_code, 303)
+        self.assertEqual(
+            retried.headers["location"],
+            f"https://app.test/agent_runner/runs/{run_id}",
+        )
         self.assertEqual(run.status, RunStatus.QUEUED)
 
 
